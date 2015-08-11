@@ -13,8 +13,8 @@ testCase label assertion = TestLabel label (TestCase assertion)
 main :: IO ()
 main = exitProperly $ runTestTT $ TestList
        [ TestList numberTests
-       , TestList areaCodeTests ]
---       , TestList prettyPrintTests ]
+       , TestList areaCodeTests
+       , TestList prettyPrintTests ]
 
 numberTests :: [Test]
 numberTests =

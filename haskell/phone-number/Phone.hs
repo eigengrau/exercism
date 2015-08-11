@@ -3,38 +3,75 @@
 
 module Phone (areaCode, number, prettyPrint) where
 
-import Prelude.Unicode
-import Data.Char
+import           Data.Char
+import           Prelude.Unicode
+import           Text.Printf
 
 
 type PhoneNumber = String
 
+
+--------------
+-- Parsing. --
+--------------
+
 areaCode ∷ PhoneNumber → String
-areaCode (number → num) = take 3 number
+areaCode phoneNumber = areaCodeʹ
+    where
+      (areaCodeʹ, _, _) = splitNumber phoneNumber
 
 
-cleanValid ∷ PhoneNumber → PhoneNumber
-cleanValid = validated ∘ cleaned
+prefix ∷ PhoneNumber → String
+prefix phoneNumber = prefixʹ
+    where
+      (_, prefixʹ, _) = splitNumber phoneNumber
 
-number ∷ PhoneNumber → PhoneNumber
-number = cleanValid
 
+subscriber ∷ PhoneNumber → String
+subscriber phoneNumber = subscriberʹ
+    where
+      (_, _, subscriberʹ) = splitNumber phoneNumber
+
+
+splitNumber ∷ PhoneNumber → (String, String, String)
+splitNumber (validated ∘ cleaned → phoneNumber) =
+    (areaCodeʹ, prefixʹ, subscriberʹ)
+
+    where
+      (areaCodeʹ,    remain) = splitAt 3 phoneNumber
+      (prefixʹ, subscriberʹ) = splitAt 3 remain
+
+
+---------------
+-- Printing. --
+---------------
 
 prettyPrint ∷ PhoneNumber → PhoneNumber
-prettyPrint number = "(" ⧺ (show $ areaCode number) ⧺ ") " ⧺ show prefix ⧺ "-" ⧺ show remain
-  where
-    areaCode 
+prettyPrint phoneNumber =
+    printf "(%s) %s-%s"
+      (areaCode   phoneNumber)
+      (prefix     phoneNumber)
+      (subscriber phoneNumber)
+
+
+-----------------
+-- Validation. --
+-----------------
+
+number ∷ PhoneNumber → PhoneNumber
+number = validated ∘ cleaned
 
 cleaned ∷ PhoneNumber → PhoneNumber
 cleaned = filter isNumber
 
 
 validated ∷ PhoneNumber → PhoneNumber
-validated number
-  | length number < 10                     = badNumber
-  | length number ≡ 10                     = number
-  | length number ≡ 11 ∧ head number ≡ '1' = tail number
---  | length number ≡ 11 ∧ head number ≢ '1' = badNumber
-  | otherwise                              = badNumber
+validated phoneNumber
+  | length phoneNumber < 10  = badNumber
+  | length phoneNumber ≡ 10  = phoneNumber
+  | length phoneNumber ≡ 11
+    ∧ head phoneNumber ≡ '1' = tail phoneNumber
+  | otherwise                = badNumber
+
   where
     badNumber = "0000000000"
