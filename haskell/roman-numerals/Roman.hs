@@ -1,7 +1,7 @@
-{-# LANGUAGE UnicodeSyntax #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE UnicodeSyntax       #-}
 
 module Roman (numerals) where
-
 
 import           Control.Monad
 import           Control.Monad.Unicode
@@ -19,7 +19,8 @@ import           Safe
 ------------------
 
 data RomanDigit = I | V | X | L | C | D | M
-                deriving (Eq, Ord, Show, Bounded)
+  deriving (Eq, Show, Bounded, Ord)
+
 
 -- The RomanDigit Enum instance is, of course, partial. This is in
 -- line with other base instances for Bounded types. For safety,
@@ -32,20 +33,29 @@ instance Enum RomanDigit where
   toEnum   v = fromJust $ Map.lookup v toRomanValue
   fromEnum r = fromJust $ Map.lookup r fromRomanValue
 
-romanValues ∷ [Int]
-romanValues = [1, 5, 10, 50, 100, 500, 1000]
+  enumFrom x = enumFromTo x maxBound
+  enumFromTo x y
+    | x ≡ y     = [x]
+    | x > y     = x : enumFromTo (pred x) y ∷ [RomanDigit]
+    | otherwise = x : enumFromTo (succ x) y ∷ [RomanDigit]
 
-romanDigits ∷ [RomanDigit]
-romanDigits = [I, V, X, L, C, D, M]
+  enumFromThenTo = error "enumFromThenTo: undefined"           -- Feeling lazy.
 
+-- While the enum instance is provided as a nicer interface, these are
+-- used internally by the Enum instance so that the pattern matches
+-- don’t have to be given explicitly. It’s a bit unsafer though, since
+-- «fromJust» is then used when defining «fromEnum».
 toRomanValue   ∷ Map Int RomanDigit
 toRomanValue   = Map.fromList $ zip romanValues romanDigits
 fromRomanValue ∷ Map RomanDigit Int
 fromRomanValue = Map.fromList $ zip romanDigits romanValues
 
-maxRoman, minRoman ∷ Int
-maxRoman = fromEnum (maxBound ∷ RomanDigit)
-minRoman = fromEnum (minBound ∷ RomanDigit)
+-- Range notation cannot be used here, since the Enum instance uses
+-- it; this would cause endless recursion.
+romanDigits ∷ [RomanDigit]
+romanDigits = [I, V, X, L, C, D, M]
+romanValues ∷ [Int]
+romanValues = [1, 5, 10, 50, 100, 500, 1000]
 
 
 ---------------------------
@@ -82,7 +92,7 @@ additiveForm 0 = ""
 additiveForm x = show smallerDigit ⧺ remainDigits
   where
     (smallerValue, remainValue) = toEnumLE x
-    smallerDigit = toEnum smallerValue                   ∷ RomanDigit
+    smallerDigit = toEnum smallerValue                    ∷ RomanDigit
     remainDigits = additiveForm remainValue
 
 
@@ -99,7 +109,7 @@ toEnumGE x = (converted, remainder)
   where
     converted = headDef maxRoman $ dropWhile (<x) romanValues
     remainder = abs (x - fromEnum converted)
-
+    maxRoman  = fromEnum (maxBound ∷ RomanDigit)
 
 -- | Return a roman digit that has lesser or equal value than the
 -- supplied integer. Also return the remainder, if lesser.
@@ -108,22 +118,24 @@ toEnumLE x = (converted, remainder)
   where
     converted = lastDef minRoman $ takeWhile (≤x) romanValues
     remainder = abs (x - fromEnum converted)
+    minRoman  = fromEnum (minBound ∷ RomanDigit)
 
 
 -- | Return the two successors to some number.
+-- The type Int → (Int, Int) would be more natural, and safer;
+-- however, then one could not easily write «a ∈ pred2 b». Is there
+-- some fancy abstraction for containment checks on tuples? Lens?
 pred2 ∷ Int → [Int]
-pred2 x = do
-      guard (x > 5)
-      value ← concat (maybeToList $ sequence [pred', pred''])    ∷ [RomanDigit]
-      return $ fromEnum value
+pred2 x = liftM fromEnum $ guard (x > 5) ≫ pred₁ ⧺ pred₂
     where
-      x'     = safeToEnum x
-      pred'  = fmap pred x'
-      pred'' = fmap pred pred'
+      xʹ    = maybeToList (safeToEnum x)                         ∷ [RomanDigit]
+      pred₁ = fmap pred xʹ
+      pred₂ = fmap pred pred₁
 
 
--- There is also prelude-safeenum, but this replaces the Prelude
--- functions and is cumbersome with non-bounded Enums.
+-- There is also prelude-safeenum, but that one replaces the Prelude
+-- functions and is cumbersome with non-bounded Enums. Is there some
+-- nice library that provides a SafeBoundedEnum class for these cases?
 safeSucc ∷ (Eq α, Enum α, Bounded α) ⇒ α → Maybe α
 safeSucc x | x ≡ maxBound = Nothing
            | otherwise    = Just (succ x)
@@ -132,9 +144,13 @@ safePred ∷ (Eq α, Enum α, Bounded α) ⇒ α → Maybe α
 safePred x | x ≡ minBound = Nothing
            | otherwise    = Just (pred x)
 
-safeToEnum ∷ (Enum α, Bounded α) ⇒ Int → Maybe α
-safeToEnum x | x > minBound ∧ x < maxBound = Just (toEnum x)
-             | otherwise = Nothing
+safeToEnum ∷ ∀α . (Bounded α, Enum α) ⇒ Int → Maybe α
+safeToEnum x
+    | x ≥ minBoundʹ ∧ x ≤ maxBoundʹ = Just (toEnum x)
+    | otherwise                     = Nothing
+    where
+      minBoundʹ = fromEnum (minBound ∷ α)
+      maxBoundʹ = fromEnum (maxBound ∷ α)
 
 
 -- | Validate whether some number can be a positional value.
@@ -146,6 +162,7 @@ isPositional x = x `rem` 10 ↑ pred (numDigits x) ≡ 0
 -- as a decimal number.
 numDigits ∷ Int → Int
 numDigits x
+  | x <  0    = error "numDigits: undefined"
   | x < 10    = 1
   | otherwise = succ (numDigits $ x `div` 10)
 
@@ -155,11 +172,11 @@ numDigits x
 positionalValues ∷ Int → [Int]
 positionalValues x = zipWith (×) digits multipliers
   where
-    digits  = map toNum (show x)
-    multipliers  = reverse $ take (length digits) multipliers'
-    multipliers' = 1 : map (×10) multipliers'
+    digits = map toNum (show x)
+    multipliers  = reverse $ take (length digits) multipliersʹ
+    multipliersʹ = 1 : map (×10) multipliersʹ
 
     toNum c
       | result ≥ 0 ∧ result ≤ 9 = result
-      | otherwise               = undefined
+      | otherwise               = error "toNum: undefined"
       where result = ord c - 48
