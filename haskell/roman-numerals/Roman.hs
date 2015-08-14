@@ -1,6 +1,5 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE UnicodeSyntax #-}
-{-# LANGUAGE ViewPatterns  #-}
 
 module Roman (numerals) where
 
@@ -8,6 +7,8 @@ module Roman (numerals) where
 import           Control.Monad
 import           Control.Monad.Unicode
 import           Data.Char
+import           Data.Map              (Map)
+import qualified Data.Map              as Map
 import           Data.Maybe
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
@@ -21,13 +22,16 @@ import           Safe
 data RomanDigit = I | V | X | L | C | D | M
                 deriving (Eq, Ord, Show, Bounded)
 
+-- The RomanDigit Enum instance is, of course, partial. This is in
+-- line with other base instances for Bounded types. For safety,
+-- safe{succ,pred,toEnum} are provided.
 instance Enum RomanDigit where
 
-  succ v = dropWhile (≢v) romanDigits ‼ 1
-  pred v = last (takeWhile (≢v) romanDigits)
+  succ r = head $ dropWhile (≤r) romanDigits
+  pred r = last $ takeWhile (≢r) romanDigits
 
-  toEnum   v = fromJust $ lookup v toRomanValue
-  fromEnum r = fromJust $ lookup r fromRomanValue
+  toEnum   v = fromJust $ Map.lookup v toRomanValue
+  fromEnum r = fromJust $ Map.lookup r fromRomanValue
 
 romanValues ∷ [Int]
 romanValues = [1, 5, 10, 50, 100, 500, 1000]
@@ -35,10 +39,10 @@ romanValues = [1, 5, 10, 50, 100, 500, 1000]
 romanDigits ∷ [RomanDigit]
 romanDigits = [I, V, X, L, C, D, M]
 
-toRomanValue   ∷ [(Int, RomanDigit)]
-toRomanValue   = zip romanValues romanDigits
-fromRomanValue ∷ [(RomanDigit, Int)]
-fromRomanValue = zip romanDigits romanValues
+toRomanValue   ∷ Map Int RomanDigit
+toRomanValue   = Map.fromList $ zip romanValues romanDigits
+fromRomanValue ∷ Map RomanDigit Int
+fromRomanValue = Map.fromList $ zip romanDigits romanValues
 
 maxRoman, minRoman ∷ Int
 maxRoman = fromEnum (maxBound ∷ RomanDigit)
@@ -51,34 +55,35 @@ minRoman = fromEnum (minBound ∷ RomanDigit)
 
 -- | Convert a number into the Roman numeric representation.
 numerals ∷ Int → String
-numerals x = positionalValues x ≫= toRomanPositional
+numerals x = toRomanPositional =≪ positionalValues x
   where
     -- Positions in Roman numerals may be represented additively or
     -- subtractively. Subtractive representation must be used if
     -- possible, additive representation is then used as a fallback.
-    toRomanPositional n =  additiveForm n `fromMaybe` subtractiveForm n
+    toRomanPositional n =  fromMaybe (additiveForm n) (subtractiveForm n)
 
 
+-- The subtractive form allows prefixing only one subtractive digit,
+-- and that digit must be either the same digit as the following one,
+-- or it must be either of the next two smaller digits.
 subtractiveForm ∷ Int → Maybe String
 subtractiveForm 0 = Nothing
 subtractiveForm x = do
 
-  guard (isPositional x)
-  let (largerValue, remainValue) = toEnumGE x ∷ (Int, Int)
-  (show → largerDigit) ← safeToEnum largerValue ∷ Maybe RomanDigit
-  guard (remainValue ∈ (1 : pred2 largerValue))
-  (show → remainDigit) ← safeToEnum remainValue ∷ Maybe RomanDigit
-  return $ remainDigit ⧺ largerDigit
-
+  guard $ isPositional x  -- Sanity check.
+  let (largerValue, remainValue) = toEnumGE x
+  largerDigit ← safeToEnum largerValue                   ∷ Maybe RomanDigit
+  guard $ remainValue ∈ 1 : pred2 largerValue
+  remainDigit ← safeToEnum remainValue                   ∷ Maybe RomanDigit
+  return $ show =≪ [remainDigit, largerDigit]
 
 
 additiveForm ∷ Int → String
 additiveForm 0 = ""
-additiveForm x = smallerDigit ⧺ remainDigits
+additiveForm x = show smallerDigit ⧺ remainDigits
   where
     (smallerValue, remainValue) = toEnumLE x
-    smallerDigit  = show (toEnum smallerValue ∷ RomanDigit)
-    remainDigits ∷ String
+    smallerDigit = toEnum smallerValue                   ∷ RomanDigit
     remainDigits = additiveForm remainValue
 
 
@@ -93,9 +98,7 @@ additiveForm x = smallerDigit ⧺ remainDigits
 toEnumGE ∷ Int → (Int, Int)
 toEnumGE x = (converted, remainder)
   where
-    converted ∷ Int
     converted = headDef maxRoman $ dropWhile (<x) romanValues
-    remainder ∷ Int
     remainder = abs (x - fromEnum converted)
 
 
@@ -107,15 +110,17 @@ toEnumLE x = (converted, remainder)
     converted = lastDef minRoman $ takeWhile (≤x) romanValues
     remainder = abs (x - fromEnum converted)
 
+
 -- | Return the two successors to some number.
 pred2 ∷ Int → [Int]
-pred2 x = let x'     = safeToEnum x      ∷ Maybe RomanDigit
-              pred'  = fmap pred x'     ∷ Maybe RomanDigit
-              pred'' = fmap pred pred'  ∷ Maybe RomanDigit
-          in do
-            guard (x > 5)
-            value ← concat (maybeToList $ sequence [pred', pred''])
-            return $ fromEnum value
+pred2 x = do
+      guard (x > 5)
+      value ← concat (maybeToList $ sequence [pred', pred''])    ∷ [RomanDigit]
+      return $ fromEnum value
+    where
+      x'     = safeToEnum x
+      pred'  = fmap pred x'
+      pred'' = fmap pred pred'
 
 
 -- There is also prelude-safeenum, but this replaces the Prelude
@@ -135,7 +140,7 @@ safeToEnum x | x > minBound ∧ x < maxBound = Just (toEnum x)
 
 -- | Validate whether some number can be a positional value.
 isPositional ∷ Int → Bool
-isPositional x = x `rem` 10↑(numDigits x - 1) ≡ 0
+isPositional x = x `rem` 10 ↑ pred (numDigits x) ≡ 0
 
 
 -- | Return the number of digits in a number, if it were represented
@@ -151,9 +156,7 @@ numDigits x
 positionalValues ∷ Int → [Int]
 positionalValues x = zipWith (×) digits multipliers
   where
-
-    digits = map toNum (show x)
-
+    digits  = map toNum (show x)
     multipliers  = reverse $ take (length digits) multipliers'
     multipliers' = 1 : map (×10) multipliers'
 
