@@ -4,6 +4,7 @@
 module Atbash (encode) where
 
 import           Control.Monad
+import           Control.Monad.Except
 import           Control.Monad.Unicode
 import           Data.Char
 import           Data.List.Split             (chunksOf, wordsBy)
@@ -24,30 +25,30 @@ encode = encodeʹ latin ASCII
 -- Generalized encoding for arbitrary alphabets.
 encodeʹ ∷ Alphabet → EncodingMode → String → String
 encodeʹ alphabet encodingMode (map toLower → input) =
-  (unwords ∘ chunksOf 5) cipherStream
+  (unwords ∘ chunksOf 5) (either errorʹ id cipherStream)
 
     where
-      cipherStream =
-          encodeWord alphabet encodingMode =≪
-              wordsBy (not ∘ isAlphaNum) input
+      cipherStream = sequence ∘ runExceptT $
+                       encodeWord alphabet encodingMode =≪
+                         lift (wordsBy (not ∘ isAlphaNum) input)
+
+      errorʹ e = error ("encodeʹ: " ⧺ show e)
 
 
-encodeWord ∷ Alphabet → EncodingMode → String → String
+encodeWord ∷ Alphabet → EncodingMode → String → ExceptT Char [] Char
 encodeWord alphabet encodingMode word = do
 
-  char ← word
+  char ← lift word
   let codeChar = encodeChar alphabet char
 
-  case encodingMode of                                -- Could this be prettier?
-    ASCII   → guard (isAscii char)
+  -- Could this be made prettier somehow?
+  case encodingMode of
+    ASCII   → lift $ guard (isAscii char)
     Unicode → return ()
 
   if not (isLetter char)
   then return char
-  else maybe (encodingError char) return codeChar
-
-      where
-        encodingError c = error ("encodeWord: Invalid input " ⧺ show c)
+  else maybe (throwError char) return codeChar
 
 
 encodeChar ∷ Alphabet → Char → Maybe Char
@@ -64,4 +65,4 @@ latin   ∷ String
 latin    = ['a' .. 'z']
 
 russian ∷ String                                                  -- Spies only.
-russian = 'ё' : ['а' .. 'я'] 
+russian = 'ё' : ['а' .. 'я']
