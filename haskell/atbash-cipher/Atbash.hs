@@ -64,4 +64,4 @@ latin   ∷ String
 latin    = ['a' .. 'z']
 
 russian ∷ String                                                  -- Spies only.
-russian = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
+russian = 'ё' : ['а' .. 'я'] 
