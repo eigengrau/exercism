@@ -1,15 +1,13 @@
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE TemplateHaskell    #-}
 {-# LANGUAGE UnicodeSyntax      #-}
 
 module Allergies (Allergen(..), isAllergicTo, allergies) where
 
 import           Data.Bits
-import           Data.Data
-import           Data.Map           (Map)
-import qualified Data.Map           as Map
-import           Data.Maybe
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
+
+import           EnumQuoter (deriveEnum)
 
 
 ------------
@@ -24,8 +22,7 @@ data Allergen = Eggs
               | Chocolate
               | Pollen
               | Cats
-              deriving (Eq, Ord, Show, Data)
-
+              deriving (Eq, Ord, Show, Bounded)
 
 -- I am still unsure how to define instances of Enums like this one in
 -- a way that is safe yet is not bloated by a considerable amount of
@@ -58,28 +55,16 @@ data Allergen = Eggs
 -- picture. It seems to me like the simplest way of scrapping the
 -- boilerplate, remaining type-safe, and not using black voodoo would
 -- involve Template Haskell; however, I could not locate an existing
--- library for this so far.
---
--- Until I achieve illumination, I shall have to stick with the
--- mapping-based approach. :<
+-- library for this so far. For now I’m using a brittle Template
+-- Haskell quoter I rolled myself.
 
-instance Enum Allergen where
-
-    fromEnum x = fromJust $ Map.lookup x fromAllergen
-    toEnum   x = fromJust $ Map.lookup x fromBitmask
-
-    succ x = head $ dropWhile (≤x) allergens
-    pred x = last $ takeWhile (<x) allergens
+deriveEnum ''Allergen [2↑x | x ← [0..]]
 
 
--- Used internally by the Enum instance.
-allergens    ∷ [Allergen]
-allergens    = map fromConstr ∘ dataTypeConstrs $ dataTypeOf Eggs
-fromAllergen ∷ Num α ⇒ Map Allergen α
-fromAllergen = Map.fromList $ zip allergens powers2
-fromBitmask  ∷ (Ord α, Num α) ⇒ Map α Allergen
-fromBitmask  = Map.fromList $ zip powers2 allergens
-
+newtype AllergenSet = AllergenSet { getAllergenSet ∷ [Allergen] } deriving Show
+instance Enum AllergenSet where
+    fromEnum allergens = sum (map fromEnum $ getAllergenSet allergens)
+    toEnum   coded     = undefined -- TODO get factors of 2
 
 ----------
 -- API. --
@@ -97,12 +82,4 @@ isAllergicTo allergen coded =
 
 --allergies ∷ (Num α, Bits α) ⇒ α → [Allergen]
 allergies ∷ Word → [Allergen]
-allergies coded = filter (`isAllergicTo` coded) allergens
-
-
-----------------
--- Utilities. --
-----------------
-
-powers2 ∷ Num α ⇒ [α]
-powers2 = 1 : map (×2) powers2
+allergies coded = filter (`isAllergicTo` coded) [minBound .. maxBound]
