@@ -33,7 +33,7 @@ testCase :: String -> Assertion -> Test
 testCase label assertion = TestLabel label (TestCase assertion)
 
 main :: IO ()
-main = exitProperly $ runTestTT $ TestList
+main = exitProperly $ runTestTT $ TestList $
   [ withBank "initial balance is 0" $
     checkReturn (Just 0) . getBalance
   , withBank "incrementing and checking balance" $ \acct -> do
