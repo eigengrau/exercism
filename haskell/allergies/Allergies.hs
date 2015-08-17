@@ -1,5 +1,6 @@
-{-# LANGUAGE TemplateHaskell    #-}
-{-# LANGUAGE UnicodeSyntax      #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE UnicodeSyntax   #-}
+{-# LANGUAGE ViewPatterns    #-}
 
 module Allergies (Allergen(..), isAllergicTo, allergies) where
 
@@ -7,7 +8,7 @@ import           Data.Bits
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
 
-import           EnumQuoter (deriveEnum)
+import           EnumQuoter         (deriveEnum)
 
 
 ------------
@@ -61,10 +62,21 @@ data Allergen = Eggs
 deriveEnum ''Allergen [2↑x | x ← [0..]]
 
 
-newtype AllergenSet = AllergenSet { getAllergenSet ∷ [Allergen] } deriving Show
+-- When allergens are enumerable, it’s convenient if sets of allergens
+-- are also enumerable.
+
+newtype AllergenSet = AllergenSet {
+      getAllergens ∷ [Allergen]
+    } deriving Show
+
 instance Enum AllergenSet where
-    fromEnum allergens = sum (map fromEnum $ getAllergenSet allergens)
-    toEnum   coded     = undefined -- TODO get factors of 2
+
+    fromEnum (AllergenSet allergens) =
+        sum $ map fromEnum allergens
+
+    toEnum (fromIntegral → coded)  = AllergenSet filtered
+        where filtered = filter (`isAllergicTo` coded) [minBound .. maxBound]
+
 
 ----------
 -- API. --
@@ -82,4 +94,4 @@ isAllergicTo allergen coded =
 
 --allergies ∷ (Num α, Bits α) ⇒ α → [Allergen]
 allergies ∷ Word → [Allergen]
-allergies coded = filter (`isAllergicTo` coded) [minBound .. maxBound]
+allergies = getAllergens ∘ toEnum ∘ fromIntegral

@@ -1,107 +1,103 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE ViewPatterns    #-}
 {-# LANGUAGE UnicodeSyntax   #-}
 
-module EnumQuoter (deriveEnum) where
+module EnumQuoter (deriveEnum, EnumSafe(..)) where
 
+import           Control.Applicative
+import           Control.Applicative.Unicode
+import           Data.Maybe
 import           Language.Haskell.TH
-import Prelude.Unicode
+import           Prelude.Unicode
+import           Prelude.Unicode.SR
+
+
+--------------
+-- Classes. --
+--------------
+
+-- | A class for partial Enums.
+class EnumSafe α where
+    succMay    ∷ α → Maybe α
+    predMay    ∷ α → Maybe α
+    toEnumMay  ∷ Integral β ⇒ β → Maybe α
+    fromEnumʹ  ∷ α → Integer
+
 
 ----------------------
 -- The main quoter. --
 ----------------------
 
-deriveEnum ∷ Name → [Integer] → Q [Dec]
-deriveEnum name values = [d|
+-- | Derive an Enum instance that follows a given pattern.
+deriveEnum ∷ Integral α
+           ⇒ Name         -- ^ The type for which the instance is to be derived.
+           → [α]          -- ^ The values which enumerate the type, following the
+                          --   sequence in which the constructors are declared.
+           → Q [Dec]
+
+deriveEnum name (map fromIntegral → values) = do
+
+  constructors ← listConstructors name
+  let minCon = head constructors
+      maxCon = last constructors
+
+  [d|
+    instance EnumSafe $(conT name) where
+
+        fromEnumʹ x = $(mapCases 'x conPʹ integerE Nothing constructors values)
+        toEnumMay x = $(mapCases 'x integerP justE catchAll values constructors)
+
+        predMay x = $(mapCases 'x conPʹ justE catchAll (tail constructors) constructors)
+        succMay x = $(mapCases 'x conPʹ justE catchAll constructors (tail constructors))
+
     instance Enum $(conT name) where
 
-        fromEnum x = $(mkCaseFrom 'x name values)
-        toEnum   x = $(mkCaseTo   'x name values)
+        fromEnum = fromIntegral ∘ fromEnumʹ
+        toEnum   = fromJust ∘ toEnumMay ∘ fromIntegral
 
-        pred x = $(zipPred 'x name)
-        succ x = $(zipSucc 'x name)
-  |]
+        succ = fromJust ∘ succMay
+        pred = fromJust ∘ predMay
 
+        -- Since this is for Enums which may have gaps, the default
+        -- implementation won’t do.
+        enumFromTo $(conP maxCon []) _ = return $(conE maxCon)
+        enumFromTo _ $(conP minCon []) = []
+        enumFromTo x y                 = x : enumFromTo (succ x) y
 
-------------------
--- succ & pred. --
-------------------
-
-zipSucc ∷ Name →  Name → Q Exp
-zipSucc var name = do
-  constrNames ← listConstr name
-  zipCase var constrNames (tail constrNames)
-
-zipPred ∷ Name →  Name → Q Exp
-zipPred var name = do
-  constrNames ← listConstr name
-  zipCase var (tail constrNames) constrNames
-
-zipCase ∷ Name → [Name] → [Name] → Q Exp
-zipCase var from to  = do
-  errMatch ← errorMatch
-  let matches = map caseMatch pairs ⧺ [errMatch]
-  return (CaseE (VarE var) matches)
+   |]
 
     where
-      pairs = zip from to
-      caseMatch ∷ (Name, Name) → Match
-      caseMatch (a, b) = Match (ConP a []) (NormalB $ ConE b) []
-
-
-------------------------
--- fromEnum & toEnum. --
-------------------------
-
-mkCaseFrom ∷ Name → Name → [Integer] → Q Exp
-mkCaseFrom var name vals = do
-    constrNames ← listConstr name
-    mkCaseʹ var constrNames vals
-        where
-          mkCaseʹ ∷ Name → [Name] → [Integer] → Q Exp
-          mkCaseʹ var names vals = return (CaseE (VarE var) matches)
-              where matches = caseMatches names vals
-
-          caseMatches ∷ [Name] → [Integer] → [Match]
-          caseMatches names vals = zipWith mkMatch names vals
-              where
-                mkMatch conName val = let pattern = ConP conName []
-                                          body    = NormalB (LitE $ IntegerL val)
-                                      in Match pattern body []
-
-mkCaseTo ∷ Name → Name → [Integer] → Q Exp
-mkCaseTo vName name vals = do
-  constrNames ← listConstr name
-  mkCase2ʹ vName vals constrNames
-      where
-        mkCase2ʹ ∷ Name → [Integer] → [Name] → Q Exp
-        mkCase2ʹ var vals names = do
-                             err ← errorMatch
-                             return (CaseE (VarE var) (matches ⧺ [err]))
-            where matches = caseMatches2 vals names
-
-        caseMatches2 ∷ [Integer] → [Name] → [Match]
-        caseMatches2 vals names = zipWith mkMatch vals names
-            where
-              mkMatch val conName = let pattern = LitP (IntegerL val)
-                                        body    = NormalB (ConE conName)
-                                    in Match pattern body []
+      integerE = LitE ∘ IntegerL
+      integerP = LitP ∘ IntegerL
+      conPʹ x  = ConP x []
+      justE x  = AppE (ConE 'Just) (ConE x)
+      catchAll = Just $ ConE 'Nothing
 
 
 ----------------
 -- Utilities. --
 ----------------
 
-listConstr ∷ Name → Q [Name]
-listConstr name = do
+-- Create a case expression that maps safely between cases.
+mapCases ∷ Name        -- ^ Variable to bind.
+         → (α → Pat)   -- ^ Derive the pattern matches.
+         → (β → Exp)   -- ^ Deriving the returned expressions.
+         → Maybe Exp   -- ^ Optional catch-all clause.
+         → [α] → [β] → Q Exp
+
+mapCases varName toPat toExp catchAll (ZipList → as) (ZipList → bs) =
+    return $ CaseE (VarE varName) (matches ⧺ otherwiseʹ)
+
+        where
+          matches     = getZipList $ mkMatch ⦷ as ⊛ bs
+          otherwiseʹ  = maybe [] (\body → return (Match WildP (NormalB body) [])) catchAll
+          mkMatch a b = Match (toPat a) (NormalB $ toExp b) guards
+          guards      = []
+
+
+listConstructors ∷ Name → Q [Name]
+listConstructors name = do
+
   TyConI (DataD _ _ _ constructors _) ← reify name
   let names = map (\(NormalC x _) → x) constructors
   return names
-
-
-errorMatch ∷ Q Match
-errorMatch = do
-  var ← newName "x"
-  body ← mkBody
-  return (Match (VarP var) body [])
-    where
-      mkBody = ([|error "hi"|]) >>= \code → return $ NormalB code
