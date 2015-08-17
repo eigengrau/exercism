@@ -1,17 +1,18 @@
-{-# LANGUAGE UnicodeSyntax #-}
-{-# LANGUAGE ViewPatterns  #-}
+{-# LANGUAGE UnicodeSyntax   #-}
+{-# LANGUAGE ViewPatterns    #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Roman (numerals) where
 
 import           Control.Monad
 import           Control.Monad.Unicode
 import           Data.Char
-import           Data.Map              (Map)
-import qualified Data.Map              as Map
 import           Data.Maybe
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
-import           Safe
+import           Safe                  hiding (toEnumMay)
+
+import           EnumQuoter            (deriveEnum, EnumSafe(..))
 
 
 ------------------
@@ -22,40 +23,10 @@ data RomanDigit = I | V | X | L | C | D | M
   deriving (Eq, Show, Bounded, Ord)
 
 
--- The RomanDigit Enum instance is, of course, partial. This is in
--- line with other base instances for Bounded types. For safety,
--- safe{succ,pred,toRoman} are provided.
-instance Enum RomanDigit where
-
-  succ r = head $ dropWhile (≤r) romanDigits
-  pred r = last $ takeWhile (≢r) romanDigits
-
-  toEnum   v = fromJust $ Map.lookup v toRomanValue
-  fromEnum r = fromJust $ Map.lookup r fromRomanValue
-
-  enumFrom x = enumFromTo x maxBound
-  enumFromTo x y
-    | x ≡ y     = [x]
-    | x > y     = x : enumFromTo (pred x) y
-    | otherwise = x : enumFromTo (succ x) y
-
-  enumFromThenTo = error "enumFromThenTo: undefined"           -- Feeling lazy.
-
--- While the enum instance is provided as a nicer interface, these are
--- used internally by the Enum instance so that the pattern matches
--- don’t have to be given explicitly. It’s a bit unsafer though, since
--- «fromJust» is then used when defining «fromEnum».
-toRomanValue   ∷ Map Int RomanDigit
-toRomanValue   = Map.fromList $ zip romanValues romanDigits
-fromRomanValue ∷ Map RomanDigit Int
-fromRomanValue = Map.fromList $ zip romanDigits romanValues
-
--- Range notation cannot be used here, since the Enum instance uses
--- it; this would cause endless recursion.
-romanDigits ∷ [RomanDigit]
-romanDigits = [I, V, X, L, C, D, M]
-romanValues ∷ [Int]
-romanValues = [1, 5, 10, 50, 100, 500, 1000]
+-- Use Template Haskell to derive an exhaustive mapping between
+-- constructors and numeric values. Enum is probably a bit of a
+-- misnomer, since this class doesn’t really enumerate a type.
+deriveEnum ''RomanDigit [1, 5, 10, 50, 100, 500, 1000]
 
 
 ---------------------------
@@ -79,9 +50,9 @@ subtractiveForm ∷ Int → Maybe String
 subtractiveForm 0 = Nothing
 subtractiveForm (validatePositional → x) = do
       let (largerValue, remainValue) = toEnumGE x
-      largerDigit ← safeToRoman largerValue
+      largerDigit ← toEnumMay largerValue               ∷ Maybe RomanDigit
       guard $ remainValue ∈ pred2 largerValue
-      remainDigit ← safeToRoman remainValue
+      remainDigit ← toEnumMay remainValue
       return $ show =≪ [remainDigit, largerDigit]
 
 
@@ -108,6 +79,7 @@ toEnumGE x = (converted, remainder)
     converted = headDef maxRoman $ dropWhile (<x) romanValues
     remainder = abs (x - fromEnum converted)
     maxRoman  = fromEnum (maxBound ∷ RomanDigit)
+    romanValues = map fromEnum ([minBound .. maxBound] ∷ [RomanDigit])
 
 -- | Return a roman digit that has lesser or equal value than the
 -- supplied integer. Also return the remainder, if lesser.
@@ -117,34 +89,16 @@ toEnumLE x = (converted, remainder)
     converted = lastDef minRoman $ takeWhile (≤x) romanValues
     remainder = abs (x - fromEnum converted)
     minRoman  = fromEnum (minBound ∷ RomanDigit)
+    romanValues = map fromEnum ([minBound .. maxBound] ∷ [RomanDigit])
 
 
 -- | Return up to the two next predecessors to some number.
 pred2 ∷ Int → [Int]
 pred2 x = fromEnum <$> catMaybes [pred₁, pred₂]
     where
-      xʹ    = safeToRoman x
-      pred₁ = safePred =≪ xʹ
-      pred₂ = safePred =≪ pred₁
-
-
--- There is also prelude-safeenum, but that one replaces the Prelude
--- functions and is cumbersome with non-bounded Enums. Is there some
--- nice library that provides a SafeBoundedEnum class for these cases?
-safeSucc ∷ (Eq α, Enum α, Bounded α) ⇒ α → Maybe α
-safeSucc x | x ≡ maxBound = Nothing
-           | otherwise    = Just (succ x)
-
-safePred ∷ (Eq α, Enum α, Bounded α) ⇒ α → Maybe α
-safePred x | x ≡ minBound = Nothing
-           | otherwise    = Just (pred x)
-
--- Unfortunately, since RomanDibit is partial not only outside of the
--- bounds of its corresponding Bounded instance, but has «holes», this
--- function can’t be defined universally over all Bounded α, but is
--- specific to RomanDigit.
-safeToRoman ∷ Int → Maybe RomanDigit
-safeToRoman = (`Map.lookup` toRomanValue)
+      xʹ    = toEnumMay x                                    ∷ Maybe RomanDigit
+      pred₁ = predMay =≪ xʹ
+      pred₂ = predMay =≪ pred₁
 
 
 -- | Validate whether some number can be a positional value.

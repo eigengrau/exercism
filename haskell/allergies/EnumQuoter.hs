@@ -16,7 +16,9 @@ import           Prelude.Unicode.SR
 -- Classes. --
 --------------
 
--- | A class for partial Enums.
+-- | A class for partial Enums. Enum is probably not the best name,
+-- since this class doesn’t really enumerate a type. Instead, we have
+-- a partial mapping from ℕ to α.
 class EnumSafe α where
     succMay    ∷ α → Maybe α
     predMay    ∷ α → Maybe α
