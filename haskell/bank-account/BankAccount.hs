@@ -1,10 +1,16 @@
 {-# LANGUAGE UnicodeSyntax #-}
 
-module BankAccount where
+module BankAccount (
+    BankAccount,
+    openAccount,
+    closeAccount,
+    getBalance,
+    incrementBalance
+  ) where
 
-import Control.Concurrent.MVar
-import Control.Monad.Unicode
-import Prelude.Unicode
+import           Control.Concurrent.MVar
+import           Control.Monad.Unicode
+import           Prelude.Unicode
 
 
 type Currency = Integer
@@ -22,19 +28,20 @@ getBalance = fmap getBalanceʹ ∘ readMVar
 
 incrementBalance ∷ BankAccount → Currency → IO (Maybe Balance)
 incrementBalance account money = do
+
     oldAccount ← takeMVar account
     let oldBalance = getBalanceʹ oldAccount
         newBalance = fmap (+money) oldBalance
-        newAcct = BankAccountʹ newBalance
-    putMVar account newAcct
+        newAccount = BankAccountʹ newBalance
+    putMVar account newAccount
     return newBalance
 
 
 openAccount ∷ IO BankAccount
-openAccount = print "open" ≫ newMVar newAccount ≫= \acc →  print "opened" ≫ return acc
+openAccount = newMVar newAccount
     where newAccount = BankAccountʹ (Just 0)
 
 
 closeAccount ∷ BankAccount → IO ()
-closeAccount account = print "close" ≫ takeMVar account ≫ putMVar account closedAccount ≫ print "closed"
+closeAccount account = takeMVar account ≫ putMVar account closedAccount
     where closedAccount = BankAccountʹ Nothing
