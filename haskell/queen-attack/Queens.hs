@@ -4,13 +4,12 @@
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TypeFamilies          #-}
-{-# LANGUAGE ViewPatterns          #-}
 {-# LANGUAGE TypeSynonymInstances  #-}
 {-# LANGUAGE UnicodeSyntax         #-}
-{-# LANGUAGE FlexibleInstances         #-}
 
 module Queens (boardString, canAttack) where
 
+import           Control.Applicative
 import           Control.Applicative.Unicode
 import           Control.Lens                hiding ((&))
 import           Control.Monad
@@ -21,9 +20,11 @@ import           Data.Maybe
 import           Data.Vector                 (Vector)
 import qualified Data.Vector                 as Vector
 import           Data.Vector.Unicode.SR
+import           Debug.Trace
 import           Prelude.SR
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
+
 
 ------------
 -- Types. --
@@ -31,8 +32,6 @@ import           Prelude.Unicode.SR
 
 type Piece    = Char
 type Position = (Int, Int)
-
-
 
 data Board α = Board [[α]]
 
@@ -53,9 +52,14 @@ instance Applicative Board where
 
     pure x = Board (replicate 8 rowsʹ)
         where rowsʹ = replicate 8 x
+        -- Alternative: Board [[x]]
 
-    Board rows₁ <*> Board rows₂ =
-        Board $ zipWith (⊛) rows₁ rows₂
+    Board rows₁ <*> Board rows₂ = Board $ fmap getZipList zippedRows
+        where zippedRows = zipWith (⊛) (fmap ZipList rows₁) (fmap ZipList rows₂)
+
+instance Monoid α ⇒ Monoid (Board α) where
+    mempty = Board [[]]
+    board₁ `mappend` board₂ = (⊕) ⦷ board₁ ⊛ board₂
 
 instance Foldable Board where
     foldMap f (Board rows) = foldMap (foldMap f) rows
@@ -65,7 +69,7 @@ instance Traversable Board where
 
 instance Ixed (Board α) where
     ix (i,j) f (Board rows) =
-        Board ⦷ (ix i ∘ ix j) f rows
+        Board ⦷ (ix j ∘ ix i) f rows
 
 -- Why does this overlap with «instance (i ~ j) ⇒ Indexable i (Indexed
 -- j)» from Control.Lens? E.g., arising from «emptyBoard ^.. (indexing
@@ -73,7 +77,7 @@ instance Ixed (Board α) where
 -- type-equal with Int? Ah, I keep forgetting GHC doesn’t take
 -- constraints into account for disambiguation.
 instance {-# OVERLAPS #-} Indexable Int (Indexed Position) where
-    indexed (Indexed f) i = f (i `div` 8, i `mod` 8)
+    indexed (Indexed f) i = f (i `mod` 8, i `div` 8)
 
 instance FunctorWithIndex Position Board where
     imap f (Board rows) = Board (zipWith applyRow rows [0..8])
@@ -158,22 +162,27 @@ normalizeRowCol v
 -- [1]
 -- [2,3]
 
+
+getDiag ∷ [Position] → Board α → [α]
+getDiag diagonalsʹ board = board ^.. indexing each ∘ ifiltered (\i _ → i∈diagonalsʹ)
+
+setDiag ∷ [Position] → Board α → [α] → Board α
+setDiag positions board c = List.foldl' (\b p → b & ix p .~ head c) board positions
+
 -- diagonals ∷ Position → Lens (Board α) (Board α) α [α]
 --diagonals ∷ Position → Lens' (Board Piece) [Piece]
-diagonals ∷ Position → Lens' (Board α) [α]
-diagonals (x,0) = lens getDiag setDiag
+diagonals ∷ Show α ⇒ Position → Lens' (Board α) [α]
+diagonals (x,y) = lens (getDiag $ diagonalsʹ (x,y)) (setDiag $ diagonalsʹ (x,y))
     where
-      getDiag board = board ^.. indexing each ∘ ifiltered (\i → const (i∈diag))
-      setDiag board c = List.foldl' (\b p → b & ix p .~ head c) board diag
-      diag = zip [x..7] [0..7]
 
-
-diagonals (0,y) = lens getDiag undefined
+diagonalsʹ (x,y) = positions
     where
-      getDiag board = board ^.. indexing each ∘ ifiltered (\i → const (i∈diag))
-      diag = zip [0..7] [y..7] ∷ [Position]
+      positions = (x,y) : zip up left ⧺ zip up right ⧺ zip down left ⧺ zip down right
+      down  = [y+1, y+2 .. 8]
+      up    = [y-1, y-2 .. 0]
+      left  = [x-1, x-2 .. 0]
+      right = [x+1, x+2 .. 8]
 
-diagonals (x,y) = diagonals (pred x, pred y)
 
 goer ∷ Traversal' (Board Piece) [Piece]
 goer f (Board rows) = (\x → Board [x])  ⦷ f ['a']
