@@ -1,6 +1,9 @@
 {-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE QuasiQuotes                #-}
+{-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UnicodeSyntax              #-}
@@ -10,6 +13,8 @@ module Queens (boardString, canAttack) where
 
 import           Control.Applicative
 import           Control.Applicative.Unicode
+import           Control.Comonad
+import           Control.Comonad.Store
 import           Control.Lens
 import           Control.Monad.Unicode
 import           Data.Foldable
@@ -17,10 +22,12 @@ import           Data.List
 import           Data.Maybe
 import           Data.Tuple
 import           GHC.Exts
+import           Language.Haskell.Codo
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
-import Control.Comonad
-
+import Data.Monoid
+import Control.Monad.Reader
+import Control.Monad.Trans
 
 ----------
 -- API. --
@@ -42,9 +49,18 @@ boardStringʹ whiteQueen blackQueen =
     show emptyBoard  -- (putPiece "W" whiteQueen =>> putPiece "B" blackQueen) emptyBoard
 
   where
-    putPiece piece position board =
-        ix position .~ piece
 
+putPiece ∷ Piece → Maybe Position → Board Piece → Maybe (Board Piece)
+putPiece piece position board =
+    fmap (\p → board & ix p .~ piece) position
+
+
+data Builder α β = Builder { runBuilder ∷ α → Maybe β }
+instance Monoid α ⇒ Functor (Builder α) where
+    fmap f (Builder g) = Builder $ fmap f ∘ g
+instance Monoid α ⇒ Applicative (Builder α) where
+    pure x = Builder (const $ Just x)
+    Builder f <*> Builder g = Builder (\x → (f (g x)))
 
 canAttack, canAttackʹ ∷ Position
                       → Position
@@ -93,11 +109,6 @@ instance Monoid Piece where
     Piece x   `mappend` Piece y   = Piece (x ⊕ y)
 
 
-data BoardBuilder α β = BoardBuilder { runBuilder ∷ α → β }
-chain ∷ BoardBuilder α β → BoardBuilder β γ → BoardBuilder α γ
-chain (BoardBuilder f) (BoardBuilder g) = BoardBuilder (g ∘ f)
-
-
 data Board α = Board [[α]]                                         -- The board.
 
 instance Eq α ⇒ Eq (Board α) where
@@ -112,8 +123,8 @@ instance Applicative Board where
         where
           zippedRows = zipWith (⊛) (fmap ZipList rows₁) (fmap ZipList rows₂)
 
-instance Monoid α ⇒ Monoid (Board α) where
-    mempty = Board mempty
+instance Monoid (Board Piece) where
+    mempty = Board (replicate 8 (replicate 8 "_"))
     board₁ `mappend` board₂ = liftA2 (⊕) board₁ board₂
 
 
@@ -126,6 +137,9 @@ instance Ixed (Board α) where
 instance Show (Board Piece) where
     show (Board rows) = showRow =≪ rows
         where showRow = (⧺"\n") ∘ intersperse ' ' ∘ (show =≪)
+
+type BoardMaker = Board Piece → Maybe Position → Board Piece
+
 
 
 ----------------
