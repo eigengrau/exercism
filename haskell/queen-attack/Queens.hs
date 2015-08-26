@@ -1,9 +1,7 @@
 {-# LANGUAGE FlexibleInstances          #-}
-{-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE QuasiQuotes                #-}
-{-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UnicodeSyntax              #-}
@@ -13,21 +11,13 @@ module Queens (boardString, canAttack) where
 
 import           Control.Applicative
 import           Control.Applicative.Unicode
-import           Control.Comonad
-import           Control.Comonad.Store
 import           Control.Lens
 import           Control.Monad.Unicode
-import           Data.Foldable
 import           Data.List
-import           Data.Maybe
 import           Data.Tuple
 import           GHC.Exts
-import           Language.Haskell.Codo
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
-import Data.Monoid
-import Control.Monad.Reader
-import Control.Monad.Trans
 
 ----------
 -- API. --
@@ -46,21 +36,8 @@ boardString (fmap swap → whiteQueen) (fmap swap → blackQueen) =
 
 boardStringʹ whiteQueen blackQueen =
 
-    show emptyBoard  -- (putPiece "W" whiteQueen =>> putPiece "B" blackQueen) emptyBoard
+    show $ emptyBoard & (ixMay whiteQueen .~ "W") ∘ (ixMay blackQueen .~ "B")
 
-  where
-
-putPiece ∷ Piece → Maybe Position → Board Piece → Maybe (Board Piece)
-putPiece piece position board =
-    fmap (\p → board & ix p .~ piece) position
-
-
-data Builder α β = Builder { runBuilder ∷ α → Maybe β }
-instance Monoid α ⇒ Functor (Builder α) where
-    fmap f (Builder g) = Builder $ fmap f ∘ g
-instance Monoid α ⇒ Applicative (Builder α) where
-    pure x = Builder (const $ Just x)
-    Builder f <*> Builder g = Builder (\x → (f (g x)))
 
 canAttack, canAttackʹ ∷ Position
                       → Position
@@ -127,7 +104,6 @@ instance Monoid (Board Piece) where
     mempty = Board (replicate 8 (replicate 8 "_"))
     board₁ `mappend` board₂ = liftA2 (⊕) board₁ board₂
 
-
 type instance IxValue (Board α) = α
 type instance Index   (Board α) = Position
 instance Ixed (Board α) where
@@ -137,9 +113,6 @@ instance Ixed (Board α) where
 instance Show (Board Piece) where
     show (Board rows) = showRow =≪ rows
         where showRow = (⧺"\n") ∘ intersperse ' ' ∘ (show =≪)
-
-type BoardMaker = Board Piece → Maybe Position → Board Piece
-
 
 
 ----------------
@@ -151,8 +124,8 @@ column, row, diagonals ∷ Position → [Position]
 column (x,_) = (x,) ⦷ [0..7]
 row    (_,y) = (,y) ⦷ [0..7]
 
-diagonals pos = filter (allOf both inBounds) ∘ getZipSlide $
-                  traverseOf both slideUpDown pos
+diagonals posʹ = filter (allOf both inBounds) ∘ getZipSlide $
+                   traverseOf both slideUpDown posʹ
 
     -- This overgenerates some coordinates for the sake of
     -- conciseness. It would be nice if the inbounds filter
@@ -180,3 +153,13 @@ instance Applicative ZipSlide where
     ZipSlide f <*> ZipSlide l =  ZipSlide (up ⧺ down)
         where up   = getZipList $ ZipList f ⊛ ZipList l
               down = getZipList $ ZipList f ⊛ ZipList (reverse l)
+
+
+ixMay ∷ Maybe Position
+      → Lens (Board Piece) (Board Piece)
+             (Maybe Piece) Piece
+ixMay Nothing     = lens (const Nothing) const
+ixMay (Just posʹ) = lens getMay setMay
+    where
+      getMay board   = board ^? ix posʹ
+      setMay board x = board  & ix posʹ .~ x
