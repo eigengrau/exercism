@@ -1,9 +1,8 @@
-{-# LANGUAGE ExistentialQuantification  #-}
-{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UnicodeSyntax              #-}
@@ -17,6 +16,8 @@ import           Control.Lens
 import           Control.Monad.Unicode
 import           Data.List
 import           Data.Maybe
+import           Data.Semigroup
+import           Data.Semigroup.Reducer
 import           Data.Tuple
 import           GHC.Exts
 import           Prelude.Unicode
@@ -38,32 +39,33 @@ boardString (fmap swap → whiteQueen) (fmap swap → blackQueen) =
 
     boardStringʹ whiteQueen blackQueen
 
-boardStringʹ whiteQueen blackQueen = show ∘ fromMaybe emptyBoard $
+boardStringʹ whiteQueen blackQueen = show board
 
-    setBlack ↑∘ setWhite `runEventual` emptyBoard
+    where
+      board  = foldReduce [setBlack, setWhite] emptyBoard          ∷ Board Piece
 
-        where
-          setBlack = Eventual $ setMay blackQueen "B"
-          setWhite = Eventual $ setMay whiteQueen "W"
-          setMay pos piece board = fmap (\p → board & ix p .~ piece) pos
+      setBlack = setMay blackQueen "B"                 ∷ EndoMaybe (Board Piece)
+      setWhite = setMay whiteQueen "W"
 
-          -- emptyBoard & (ixMay whiteQueen .~ "W") ∘ (ixMay blackQueen .~ "B")
-          -- setMay' pos piece = set ⦷ liftA ix pos ⊛ pure piece
-          -- (↑∘) = liftA2 (∘)
-          -- setMay pos piece = set ⦷ liftA ix pos ⊛ pure piece
+      setMay pos piece boardʹ = fmap (\p → boardʹ & ix p .~ piece) pos
 
-
-data Eventual α = Eventual { runEventual ∷ α → Maybe α }
-
-(↑∘) ∷ Monoid α ⇒ Eventual α → Eventual α → Eventual α
-Eventual f ↑∘ Eventual g =
-    Eventual $ \a → case f a of
-                      Nothing → case g mempty of
-                                  Nothing → Just mempty
-                                  Just c  → Just c
-                      Just b  → case g b of
-                                  Nothing → Just b
-                                  Just c  → Just c
+      -- Is there any abstraction which allows chaining the «setMay»
+      -- calls in a way that doesn’t introduce instance ambiguities
+      -- like the «reducers» package does? One can define a «Maybe
+      -- Position → Lens' (Board Piece) (Maybe Piece)», which can be
+      -- chained, but I’m not sure it satisfies the required laws. It
+      -- is also possible to define a custom composition operator for
+      -- newtyped «Board Piece → Maybe (Board Piece)», but this seems
+      -- overkill without making it more general.
+      --
+      -- Obviously, one could also have applied the lens to the empty
+      -- board twice, folding the two resulting boards using the
+      -- Monoid instance. But this creates two separate structures,
+      -- whereas this isn’t necessary when chaining to operations
+      -- instead. Unless I misunderstood the purpose of «reducers»,
+      -- this is exactly what they’re there for. However, the instance
+      -- ambiguities make this abstraction somewhat less satisfying
+      -- than it could be.
 
 
 canAttack, canAttackʹ ∷ Position
@@ -76,13 +78,13 @@ canAttack (swap → pos₁) (swap → pos₂) =
 
 canAttackʹ pos₁ pos₂ =
 
-    -- Columns and rows could be directly checked within
-    -- guards, but for the sake of compositionality this
-    -- optimization is not pursued here.
+    -- Columns and rows could be directly checked within guards, but
+    -- for the sake of compositionality this optimization is not
+    -- pursued here.
     --
-    -- Since the domain presupposes both pieces are queens,
-    -- so that the canAttack relation is reflexive, it
-    -- suffices to check in one direction.
+    -- Since the domain presupposes both pieces are queens, so that
+    -- the canAttack relation is reflexive, it suffices to check in
+    -- one direction.
 
     any (pos₁ ∈) [row pos₂, column pos₂, diagonals pos₂]
 
@@ -96,12 +98,18 @@ emptyBoard = Board (replicate 8 rowʹ)
 -- Types. --
 ------------
 
-type Measure  = Int                                         -- Generic synonyms.
-type Position = (Measure, Measure)
+type Measure     = Int                                      --------------------
+type Position    = (Measure, Measure)                       -- Generic synonyms.
+
+type EndoOf    α = α → α
+type EndoMaybe α = α → Maybe α
+
+                       -- Is there an existing abstraction/name for
+                       -- EndoMaybe?
 
 
-newtype Piece = Piece String                                    -- Board pieces.
-    deriving (Eq, IsString)
+newtype Piece = Piece String                                    ----------------
+    deriving (Eq, IsString)                                     -- Board pieces.
 
 instance Show Piece where
     show (Piece x) = x
@@ -113,13 +121,13 @@ instance Monoid Piece where
     Piece x   `mappend` Piece y   = Piece (x ⊕ y)
 
 
-data Board α = Board [[α]]                                         -- The board.
+data Board α = Board [[α]]                                         -------------
+    deriving (Eq, Functor)                                         -- The board.
 
-instance Eq α ⇒ Eq (Board α) where
-    Board rows₁ == Board rows₂ = rows₁ ≡ rows₂
-
-instance Functor Board where
-    fmap f (Board rows) = Board $ fmap (fmap f) rows
+                       -- A Seq would be more appropriate for a chess
+                       -- it would need a ZipList-like Seq wrapper.
+                       -- board. This will require defining the
+                       -- Applicative instance differently, though, or
 
 instance Applicative Board where
     pure x = Board $ repeat (repeat x)
@@ -127,9 +135,15 @@ instance Applicative Board where
         where
           zippedRows = zipWith (⊛) (fmap ZipList rows₁) (fmap ZipList rows₂)
 
+instance Semigroup (Board Piece) where
+    board₁ <> board₂ = liftA2 (⊕) board₁ board₂
+
 instance Monoid (Board Piece) where
-    mempty = Board (replicate 8 (replicate 8 "_"))
-    board₁ `mappend` board₂ = liftA2 (⊕) board₁ board₂
+    mempty  = Board (replicate 8 (replicate 8 "_"))
+    mappend = (<>)
+
+instance Reducer (EndoMaybe (Board Piece)) (EndoOf (Board Piece))
+    where unit f = fromMaybe mempty ∘ f
 
 type instance IxValue (Board α) = α
 type instance Index   (Board α) = Position
@@ -159,17 +173,14 @@ diagonals posʹ = filter (allOf both inBounds) ∘ getZipSlide $
     -- could be put inside the traversal somehow.
 
     where
-      slideUpDown ordinate = (ordinate+) ⦷ ZipSlide [-8..8]
+      slideUpDown ordinate = fmap (ordinate+) (ZipSlide [-8..8])
       inBounds = (≥0) ∧∧ (≤7)
 
 
 -- | An applicative context like a ZipList, but the zipping effect
 -- is run both forwards and backwards.
 data ZipSlide α = ZipSlide { getZipSlide ∷ [α] }
-                  deriving Show
-
-instance Functor ZipSlide where
-    fmap f (ZipSlide x) = ZipSlide (fmap f x)
+    deriving (Show, Functor)
 
 instance Applicative ZipSlide where
 
@@ -180,13 +191,3 @@ instance Applicative ZipSlide where
     ZipSlide f <*> ZipSlide l = ZipSlide (up ⧺ down)
         where up   = getZipList $ ZipList f ⊛ ZipList l
               down = getZipList $ ZipList f ⊛ ZipList (reverse l)
-
-
---ixMay ∷ Maybe Position → Setting' (Board Piece)
---      → Lens (Board Piece) (Board Piece)
---             (Maybe Piece)        Piece
-ixMay Nothing     = lens (const Nothing) const
-ixMay (Just posʹ) = lens getMay setMay
-    where
-      getMay board   = board ^? ix posʹ
-      setMay board x = board  & ix posʹ .~ x
