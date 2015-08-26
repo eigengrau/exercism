@@ -1,3 +1,5 @@
+{-# LANGUAGE ExistentialQuantification  #-}
+{-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
@@ -14,10 +16,12 @@ import           Control.Applicative.Unicode
 import           Control.Lens
 import           Control.Monad.Unicode
 import           Data.List
+import           Data.Maybe
 import           Data.Tuple
 import           GHC.Exts
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
+
 
 ----------
 -- API. --
@@ -34,9 +38,32 @@ boardString (fmap swap → whiteQueen) (fmap swap → blackQueen) =
 
     boardStringʹ whiteQueen blackQueen
 
-boardStringʹ whiteQueen blackQueen =
+boardStringʹ whiteQueen blackQueen = show ∘ fromMaybe emptyBoard $
 
-    show $ emptyBoard & (ixMay whiteQueen .~ "W") ∘ (ixMay blackQueen .~ "B")
+    setBlack ↑∘ setWhite `runEventual` emptyBoard
+
+        where
+          setBlack = Eventual $ setMay blackQueen "B"
+          setWhite = Eventual $ setMay whiteQueen "W"
+          setMay pos piece board = fmap (\p → board & ix p .~ piece) pos
+
+          -- emptyBoard & (ixMay whiteQueen .~ "W") ∘ (ixMay blackQueen .~ "B")
+          -- setMay' pos piece = set ⦷ liftA ix pos ⊛ pure piece
+          -- (↑∘) = liftA2 (∘)
+          -- setMay pos piece = set ⦷ liftA ix pos ⊛ pure piece
+
+
+data Eventual α = Eventual { runEventual ∷ α → Maybe α }
+
+(↑∘) ∷ Monoid α ⇒ Eventual α → Eventual α → Eventual α
+Eventual f ↑∘ Eventual g =
+    Eventual $ \a → case f a of
+                      Nothing → case g mempty of
+                                  Nothing → Just mempty
+                                  Just c  → Just c
+                      Just b  → case g b of
+                                  Nothing → Just b
+                                  Just c  → Just c
 
 
 canAttack, canAttackʹ ∷ Position
@@ -150,14 +177,14 @@ instance Applicative ZipSlide where
 
     pure x = ZipSlide (pure x)
 
-    ZipSlide f <*> ZipSlide l =  ZipSlide (up ⧺ down)
+    ZipSlide f <*> ZipSlide l = ZipSlide (up ⧺ down)
         where up   = getZipList $ ZipList f ⊛ ZipList l
               down = getZipList $ ZipList f ⊛ ZipList (reverse l)
 
 
-ixMay ∷ Maybe Position
-      → Lens (Board Piece) (Board Piece)
-             (Maybe Piece) Piece
+--ixMay ∷ Maybe Position → Setting' (Board Piece)
+--      → Lens (Board Piece) (Board Piece)
+--             (Maybe Piece)        Piece
 ixMay Nothing     = lens (const Nothing) const
 ixMay (Just posʹ) = lens getMay setMay
     where
