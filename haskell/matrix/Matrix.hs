@@ -12,7 +12,7 @@ module Matrix (
 
 import qualified Data.List              as List
 import           Data.List.Split
-import           Data.Vector            (Vector, empty, head, null, (!))
+import           Data.Vector            (Vector, empty, head, null, (!), singleton)
 import           Data.Vector.Unicode.SR
 import           GHC.Exts
 import           Prelude                hiding (head, null, tail)
@@ -107,7 +107,7 @@ reshape (nRows, nCols) =
 
 
 flatten ∷ Matrix α → Vector α
-flatten = foldMap (⊳ empty)
+flatten = foldMap singleton
 
 
 ----------------
