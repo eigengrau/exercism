@@ -3,14 +3,15 @@
 {-# LANGUAGE DeriveFunctor             #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts          #-}
-{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE FlexibleInstances         #-}
 {-# LANGUAGE GADTs                     #-}
 {-# LANGUAGE KindSignatures            #-}
 {-# LANGUAGE PolyKinds                 #-}
 {-# LANGUAGE RankNTypes                #-}
-
 {-# LANGUAGE ScopedTypeVariables       #-}
 {-# LANGUAGE StandaloneDeriving        #-}
+{-# LANGUAGE TemplateHaskell           #-}
+{-# LANGUAGE TypeFamilies              #-}
 {-# LANGUAGE UndecidableInstances      #-}
 {-# LANGUAGE UnicodeSyntax             #-}
 
@@ -24,6 +25,8 @@ import           Data.Data
 import           Data.List
 import           Data.Maybe
 import           Data.Monoid.Unicode
+import           Data.Singletons
+import           Data.Singletons.TH
 import           Data.Typeable
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
@@ -96,10 +99,27 @@ instance Traversable (Tree α) where
     traverse f (Leaf x)    = Leaf  ⦷ f x
 
 
-data N --deriving Typeable -- Nominal projections.
-data V --deriving Typeable -- Verbal projections.
-data C --deriving Typeable -- Complementizers.
+
+
+singletons [d|
+   data X = A | B
+      deriving (Eq,Show)
+   data Projection = Full | Bar | Lex deriving Show
+ |]
+
+
+
+data N
+data V
+data C
 data P
+
+data Test (a∷X) = Test deriving Show
+
+reflect ∷
+  ∀ (a ∷ k) . (SingI a, SingKind ('KProxy ∷ KProxy k))
+  ⇒ Proxy a → Demote a
+reflect _ = fromSing (sing ∷ Sing a)
 
 ------------------------------------
 -- A toy grammar for this domain. --
