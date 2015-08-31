@@ -2,6 +2,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveFoldable     #-}
 {-# LANGUAGE DeriveFunctor      #-}
 {-# LANGUAGE DeriveTraversable  #-}
@@ -72,28 +73,31 @@ data XP (head∷Head) = XP (XBar head)
                     | XPₐ (XP head) (X Coord) (XP head)
 data XBar (head∷Head) = XBar (X head)
                       | XBarₘ (X head) [Complement]
-                      | ∀ (adjunct∷Head) .
-                        XBarₐ (XBar head) (Adjunct adjunct)
-                      | ∀ (adjunct∷Head) .
-                        XBarₐʹ (Adjunct adjunct) (XBar head)
+                      | XBarₐ (XBar head) Adjunct
+                      | XBarₐʹ Adjunct (XBar head)
 data X (head∷Head) = X String
 
 data Complement =
-     ∀ (head∷Head) .  Complement₂ (XP   head)
-  |  ∀ (head∷Head) .  Complement₁ (XBar head)
-  |  ∀ (head∷Head) .  Complement₀ (X    head)
+     ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Complement₂ (XP   head)
+  |  ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Complement₁ (XBar head)
+  |  ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Complement₀ (X    head)
 
 data Specifier =
-    ∀ (head∷Head) .  Specifier₂ (XP   head)
-  | ∀ (head∷Head) .  Specifier₁ (XBar head)
-  | ∀ (head∷Head) .  Specifier₀ (X    head)
+    ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Specifier₂ (XP   head)
+  | ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Specifier₁ (XBar head)
+  | ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Specifier₀ (X    head)
 
 
-data Adjunct (head∷Head) =
-    Adjunct₂ (XP   head)
-  | Adjunct₁ (XBar head)
-  | Adjunct₀ (X    head)
-    deriving Show
+data Adjunct =
+     ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Adjunct₂ (XP   head)
+  |  ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Adjunct₁ (XBar head)
+  |  ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Adjunct₀ (X    head)
+
+instance Show Adjunct  where
+    show (Adjunct₂ x) = show x
+    show (Adjunct₁ x) = show x
+    show (Adjunct₀ x) = show x
+
 
 instance Show Complement where
     show (Complement₂ x) = show x
@@ -105,19 +109,25 @@ instance Show Specifier where
     show (Specifier₁ x) = show x
     show (Specifier₀ x) = show x
 
-instance Show (XP head) where
-    show (XP  head)      =  show head
-    show (XPₛ spec head) = "[[" ⧺ show spec ⧺ "][" ⧺ show head ⧺ "]]"
-    show (XPₐ l j r)     = "[[" ⧺ show l ⧺ "]" ⧺ show j ⧺ "[" ⧺ show r ⧺ "]]"
+instance (SingI head, Show (Demote head)) ⇒ Show (XP head) where
+    show (XP  head)      =  show head ⧺ " " ⧺
+                              show (fromSing (sing ∷ Sing head))
+    show (XPₛ spec head) = "((" ⧺ show spec ⧺ ")(" ⧺ show head ⧺ ")) " ⧺
+                             show (fromSing (sing ∷ Sing head)) ⧺ "P"
+    show (XPₐ l j r)     = "((" ⧺ show l ⧺ ") " ⧺ show j ⧺ " (" ⧺ show r ⧺ ")) "
+                             ⧺ show (fromSing (sing ∷ Sing head))
 
-instance Show (XBar head) where
-    show (XBar   head)       = show head
-    show (XBarₘ  head comps) = show head ⧺ " [" ⧺ (comps ≫= show) ⧺ "]"
-    show (XBarₐ  head adj)   = show head ⧺ " ⟨" ⧺ show adj        ⧺ "⟩"
-    show (XBarₐʹ adj head)   = "⟨" ⧺ show adj  ⧺ "⟩ " ⧺ show head
+instance (SingI head, Show (Demote head)) ⇒ Show (XBar head) where
+    show (XBar   head)       = show head ⧺ " " ⧺ show (fromSing (sing ∷ Sing head))
+    show (XBarₘ  head comps) = show head ⧺ " [" ⧺ (comps ≫= (⧺" ") ∘ show) ⧺ "]" ⧺ " " ⧺
+                                 show (fromSing (sing ∷ Sing head))
+    show (XBarₐ  head adj)   = show head ⧺ " ⟨" ⧺ show adj        ⧺ "⟩" ⧺ " " ⧺
+                                 show (fromSing (sing ∷ Sing head))
+    show (XBarₐʹ adj head)   = "⟨" ⧺ show adj  ⧺ "⟩ " ⧺ show head ⧺ " " ⧺
+                                 show (fromSing (sing ∷ Sing head))
 
-instance Show (X head) where
-    show (X s) = s
+instance (SingI head, Show (Demote head)) ⇒ Show (X head) where
+    show (X s) = s⧺ " " ⧺ show (fromSing (sing ∷ Sing head))
 
 
 ----------------------
@@ -178,7 +188,7 @@ ip ∷ ReadP IP
 ip = do
   spec  ← (Just ∘ Specifier₂ ⦷ np) ⧻ return Nothing
   ihead ← ibar
-  return $ maybe (XPₛ (Specifier₀ (X "trace")) ihead) (`XPₛ` ihead) spec
+  return $ maybe (XPₛ (Specifier₀ (X "trace" ∷ X 'N)) ihead) (`XPₛ` ihead) spec
 
 ibar ∷ ReadP IBar
 ibar = do
