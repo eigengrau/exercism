@@ -1,36 +1,29 @@
-{-# LANGUAGE DataKinds                 #-}
-{-# LANGUAGE DeriveDataTypeable        #-}
-{-# LANGUAGE DeriveFunctor             #-}
-{-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE FlexibleContexts          #-}
-{-# LANGUAGE FlexibleInstances         #-}
-{-# LANGUAGE GADTs                     #-}
-{-# LANGUAGE KindSignatures            #-}
-{-# LANGUAGE PolyKinds                 #-}
-{-# LANGUAGE RankNTypes                #-}
-{-# LANGUAGE ScopedTypeVariables       #-}
-{-# LANGUAGE StandaloneDeriving        #-}
-{-# LANGUAGE TemplateHaskell           #-}
-{-# LANGUAGE TypeFamilies              #-}
-{-# LANGUAGE UndecidableInstances      #-}
-{-# LANGUAGE UnicodeSyntax             #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveFoldable     #-}
+{-# LANGUAGE DeriveFunctor      #-}
+{-# LANGUAGE DeriveTraversable  #-}
+{-# LANGUAGE UnicodeSyntax      #-}
+{-# LANGUAGE ExistentialQuantification      #-}
+{-# LANGUAGE StandaloneDeriving      #-}
 
 module House (rhyme) where
 
 import           Control.Applicative          hiding (many, optional, some)
 import           Control.Applicative.Unicode
 import           Control.Monad
+import           Control.Monad.Unicode
 import           Data.Char
+import Data.Functor
 import           Data.Data
 import           Data.List
 import           Data.Maybe
 import           Data.Monoid.Unicode
-import           Data.Singletons
-import           Data.Singletons.TH
-import           Data.Typeable
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
 import           Text.ParserCombinators.ReadP
+import GHC.Generics
 
 
 rhyme = undefined
@@ -57,160 +50,151 @@ target = concat ∘ intersperse " " $ [
 -- A toy grammar framework. --
 ------------------------------
 
--- A tree with leaves of type λ, where left nodes must be headed by an
--- α, and right nodes must be headed by a β. This doesn’t capture that
--- α and β should be maximal projections in their respective category.
--- The practical effect is that this forbids the construction of
--- parsing rules where the subordinate nodes are not headed by the
--- categories which the superordinate tree demands.
+data Phrase λ = Phrase Head (Phrase λ) (Phrase λ)
+              | Leaf Head λ
+deriving instance Show λ ⇒ Show (Phrase λ)
+deriving instance Functor (Phrase)
+deriving instance Traversable (Phrase)
+deriving instance Foldable (Phrase)
+deriving instance Generic (Phrase λ)
+deriving instance Data λ ⇒ Data (Phrase λ)
 
-data Tree α λ =
-
-    -- The Typeable constraints are only so that the types of non-head
-    -- nodes may be pretty-printed from the Show instance.
-
-    ∀β . (Typeable β) ⇒ NodeL (Tree α λ) (Tree β λ) |   -- Head left.
-    ∀β . (Typeable β) ⇒ NodeR (Tree β λ) (Tree α λ) |   -- Head right.
-    Leaf λ
+data Head = S | N | V | C | P | A | D | Con deriving (Data, Show)
 
 
-
---deriving instance Data α ⇒ Data (Tree α String)
-deriving instance Functor (Tree α)
-
---deriving instance Show λ ⇒ Show (Tree α λ)
-instance (Show λ, Typeable α) ⇒ Show (Tree α λ) where
-    show (NodeL a b) = "NodeL " ⧺ show (typeRep (Proxy ∷ Proxy α)) ⧺
-                         "(" ⧺ show a ⧺ "," ⧺ show b ⧺ ")"
-    show (NodeR a b) = "NodeR " ⧺ show (typeRep (Proxy ∷ Proxy α)) ⧺
-                         "(" ⧺ show a ⧺ "," ⧺ show b ⧺ ")"
-    show (Leaf x)    = "Leaf "  ⧺ show (typeRep (Proxy ∷ Proxy α)) ⧺ show x
+----------------------------------
+-- Generic programming helpers. --
+----------------------------------
 
 
-
-instance Foldable (Tree α) where
-    foldMap f (NodeL a b)    = foldMap f a ⊕ foldMap f b
-    foldMap f (NodeR a b)    = foldMap f a ⊕ foldMap f b
-    foldMap f (Leaf x)       = f x
-
-instance Traversable (Tree α) where
-    traverse f (NodeL a b) = NodeL ⦷ traverse f a ⊛ traverse f b
-    traverse f (NodeR a b) = NodeR ⦷ traverse f a ⊛ traverse f b
-    traverse f (Leaf x)    = Leaf  ⦷ f x
-
-
-
-
-singletons [d|
-   data X = A | B
-      deriving (Eq,Show)
-   data Projection = Full | Bar | Lex deriving Show
- |]
-
-
-
-data N
-data V
-data C
-data P
-
-data Test (a∷X) = Test deriving Show
-
-reflect ∷
-  ∀ (a ∷ k) . (SingI a, SingKind ('KProxy ∷ KProxy k))
-  ⇒ Proxy a → Demote a
-reflect _ = fromSing (sing ∷ Sing a)
 
 ------------------------------------
 -- A toy grammar for this domain. --
 ------------------------------------
 
-sent ∷ ReadP (Tree V [String])
-sent = do
-  n ← np
-  v ← vp
+np ∷ ReadP (Phrase String)
+np = do
+  d ← option Nothing (Just ⦷ det)
+  h ← nbar +≫ conjp nbar
+  return $ maybe h (\d → Phrase N d h) d
+
+nbar ∷ ReadP (Phrase String)
+nbar = do
+  a ← option Nothing (Just ⦷ adj)
+  h ← noun
+  c ← option Nothing (Just ⦷ cp ⧻ pp ⧻ adjp)
+  let projection₁ = maybe h (Phrase N h) c
+      projection₂ = maybe projection₁ (\a → Phrase N a projection₁) a
+  return projection₂
+
+adjp ∷ ReadP (Phrase String)
+adjp = do
+  d ← option Nothing (Just ⦷ det)
+  b ← adjbar
+  return $ maybe b (\d → Phrase A d b) d
+
+adjbar ∷ ReadP (Phrase String)
+adjbar = adjbarʹ -- +≫ conjp adjbarʹ
+    where
+      adjbarʹ = do
+        a ← adj
+        c ← option Nothing (Just ⦷ np ⧻ pp ⧻ conjp np)
+        return $ maybe a (\c → Phrase A a c) c
+
+conjp ∷ ReadP (Phrase String) → ReadP (Phrase String)
+conjp phrase = do
+  p₁ ← phrase
+  let h = case p₁ of
+            Phrase h _ _ → h
+            Leaf h _     → h
+  c  ← conj
+  p₂ ← phrase +≫ conjp phrase
+  return $ Phrase h p₁ (Phrase Con c p₂)
+
+cp ∷ ReadP (Phrase String)
+cp = do
+  h ← comp
+  b ← vbar
+  return $ Phrase C h b
+
+s ∷ ReadP (Phrase String)
+s = do
+  subj ← np +≫ conjp np
+  vp ← vbar
   optional (char '.')
-  eof
-  return (NodeR n v)
+  -- eof
+  return $ Phrase V subj vp
 
-      where
+vbar ∷ ReadP (Phrase String)
+vbar = vbar₁ +≫ vbar₂
+    where
+      vbar₁ = do
+        h ← verb
+        b ← option Nothing (Just ⦷ np ⧻ conjp np ⧻ pp)
+        return $ maybe h (Phrase V h) b
 
-        vp ∷ ReadP (Tree V [String])
-        vp = do
-          v ← verb
-          object ← option Nothing (fmap Just $ pp +++ np)
-          return $ case object of
-                     Nothing → v
-                     Just content → NodeL v content
+      vbar₂ = do
+        b ← np ⧻ conjp np ⧻ pp
+        h ← verb
+        return (Phrase V b h)
 
-        pp ∷ ReadP (Tree N [String])
-        pp = do
-          p ← prep
-          n ← np
-          return $ NodeL p n
+pp ∷ ReadP (Phrase String)
+pp = do
+  h ← prep
+  b ← np
+  return (Phrase P h b)
 
-        prep ∷ ReadP (Tree N [String])
-        prep = do
-          p ← choice (fmap tstring preps)
-          return (Leaf [p])
+token ∷ ReadP String
+token = do
+  t ← munch1 isAlpha
+  void (munch1 isSpace) ⧻ eof
+  skipSpaces
+  return t
 
-        verb ∷ ReadP (Tree V [String])
-        verb = do
-          v ← choice (fmap tstring verbs)
-          return (Leaf [v])
+tstring ∷ String → ReadP String
+tstring s = do
+  result ← string s
+  void (munch1 isSpace) ⧻ eof
+  skipSpaces
+  return result
 
-        np ∷ ReadP (Tree N [String])
-        np = do
-          t ← many1 (non "that")
-          comp ← option Nothing (fmap Just (pp +++ cp))
-          return $ case comp of
-                     Nothing → Leaf t
-                     Just c  → NodeL (Leaf t) c
+non ∷ ReadP a → ReadP ()
+non unwanted = do
+  result ← readP_to_S unwanted ⦷ look
+  guard (null result)
 
-        cp ∷ ReadP (Tree N [String])
-        cp = do
-          c ← comp
-          subj ← option Nothing (fmap Just np)
-          v ← verb -- p ∷ ReadP (Tree V [String])
-          object ← option Nothing (fmap Just (pp +++ np))
-          let vpʹ = case object of
-                       Nothing → v
-                       Just o → NodeL v o
-          let vpʹʹ = case subj of
-                      Nothing → vpʹ
-                      Just s  → NodeR s vpʹ
-          return $ NodeL c vpʹʹ
+noun ∷ ReadP (Phrase String)
+noun = non (comp ⧻ prep ⧻ verb ⧻ det) ≫ Leaf N ⦷ token
 
-        comp ∷ ReadP (Tree N [String])
-        comp = do
-          c ← choice (fmap tstring comps)
-          return (Leaf [c])
+comp ∷ ReadP (Phrase String)
+comp = Leaf C ⦷ choice (tstring ⦷ comps)
+    where comps = words "that"
 
-        token ∷ ReadP String
-        token = do
-          t ← munch1 isAlpha
-          skipSpaces
-          return t
+prep ∷ ReadP (Phrase String)
+prep = Leaf P ⦷ choice (tstring ⦷ preps)
+    where preps = words "in with to at"
 
-        tstring ∷ String → ReadP String
-        tstring s = do
-          result ← string s
-          skipSpaces
-          return result
+verb ∷ ReadP (Phrase String)
+verb = Leaf V ⦷ choice (tstring ⦷ verbs)
+    where verbs = words "is belonged kept crowed woke married \
+                        \kissed milked tossed worried killed ate lay built"
 
-        non ∷ String → ReadP String
-        non s = do
-          t ← token
-          if t ≡ s
-            then pfail
-            else return t
+adj ∷ ReadP (Phrase String)
+adj = Leaf A ⦷ choice (tstring ⦷ adjs)
+    where adjs = words "sowing shaven shorn tattered torn forlorn crumpled"
 
-        comps ∷ [String]
-        comps = words "that"
+det ∷ ReadP (Phrase String)
+det = Leaf D ⦷ choice (tstring ⦷ dets)
+    where dets = words "a an the some many all his"
 
-        preps ∷ [String]
-        preps = words "in with to at"
+conj ∷ ReadP (Phrase String)
+conj = Leaf Con ⦷ choice (tstring ⦷ conjs)
+    where conjs = words "and or"
 
-        verbs ∷ [String]
-        verbs = words "is belonged kept crowed woke married \
-                      \kissed milked tossed worried killed ate lay built"
+(⧻) ∷ ReadP α → ReadP α → ReadP α
+(⧻) = (+++)
+infixr 5 ⧻
+
+(<⧺) ∷ ReadP α → ReadP α → ReadP α
+(<⧺) = (<++)
+infixr 5 <⧺
