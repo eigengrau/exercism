@@ -18,7 +18,11 @@
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE TypeFamilies              #-}
 {-# LANGUAGE UndecidableInstances      #-}
+{-# LANGUAGE TypeOperators      #-}
 {-# LANGUAGE UnicodeSyntax             #-}
+
+-- TODO: A monad that logs (via named rules) exactly which rule
+-- triggered some subtree.
 
 module House (rhyme) where
 
@@ -42,6 +46,7 @@ import           Prelude.Unicode
 import           Prelude.Unicode.SR
 import           Text.ParserCombinators.ReadP
 import  Text.Printf
+import Data.Singletons.Prelude.Eq
 
 
 rhyme = undefined
@@ -70,17 +75,19 @@ target = concat ∘ intersperse " " $ [
 
 singletons [d|
     data Head = Det | N | P | V | I | Coord | Subord | Adj | Adv
-        deriving Show
+        deriving (Show, Eq)
  |]
 
 
 data XP (head∷Head) = XP (XBar head)
-                    | ∀ (specifier∷Head) . XPₛ (Specifier) (XBar head)
-                    | XPₐ (XP head) (X Coord) (XP head)
+                    | XPₛ Specifier (XBar head)
+                    | XPₐ (XP head) (X 'Coord) (XP head)
+
 data XBar (head∷Head) = XBar (X head)
                       | XBarₘ (X head) [Complement]
                       | XBarₐ (XBar head) Adjunct
                       | XBarₐʹ Adjunct (XBar head)
+
 data X (head∷Head) = X String
 
 data Complement =
@@ -93,7 +100,6 @@ data Specifier =
   | ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Specifier₁ (XBar head)
   | ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Specifier₀ (X    head)
 
-
 data Adjunct =
     ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Adjunct₂ (XP   head)
   | ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Adjunct₁ (XBar head)
@@ -103,7 +109,6 @@ instance Show Adjunct  where
     show (Adjunct₂ x) = show x
     show (Adjunct₁ x) = show x
     show (Adjunct₀ x) = show x
-
 
 instance Show Complement where
     show (Complement₂ x) = show x
@@ -144,35 +149,61 @@ instance (SingI head, Show (Demote head)) ⇒ Show (X head) where
     show (X s) = printf "[ %s \"%s\" ]" (show $ fromSing (sing ∷ Sing head)) s
 
 
---------------------
--- Diffing trees. --
---------------------
+------------------
+-- Query trees. --
+------------------
 
-data Bla = Bla | Ble deriving (Generic, Data, Typeable)
+{-
+class FilterHead α where
+    type Result α ∷ Head
+    filterHead ∷ Demote τ → α → [XP τ]
 
-data BlaFamily ∷ * → * → * where
-    Bla' ∷ BlaFamily Bla Nil
-    Ble' ∷ BlaFamily Bla Nil
+instance SingI α ⇒ FilterHead (XP (α∷Head)) where
+    type Result (XP α) = α
+    filterHead query here@(XP head) = if null below
+                                      then if query ≡ fromSing (sing ∷ Sing α)
+                                           then [here]
+                                           else []
+                                      else below
+        where
+          below = filterHead query head
+
+    filterHead query here@(XPₛ spec head) = if null below
+                                            then if query ≡ fromSing (sing ∷ Sing α)
+                                                 then [here]
+                                                 else []
+                                            else below
+        where
+          below = filterHead query head
+
+    filterHead query here@(XPₐ l _ r) = if null below
+                                        then if query ≡ fromSing (sing ∷ Sing α)
+                                             then [here]
+                                             else []
+                                        else below
+        where below = filterHead query l ⧺ filterHead query r
 
 
-instance Type BlaFamily Bla where
-    constructors = [Concr Bla', Concr Ble']
+instance FilterHead (XBar (α∷Head)) where
+    filterHead query (XBar head) = []
+    filterHead query (XBarₘ head comps) = filterHead query comps
+    filterHead query (XBarₐ head adj)   = filterHead query adj
+    filterHead query (XBarₐʹ adj head)  = filterHead query adj
+instance FilterHead Specifier τ where
+    filterHead query (Specifier₂ head) = filterHead query head
+    filterHead query (Specifier₁ head) = filterHead query head
+    filterHead query (Specifier₀ head) = []
+instance FilterHead Adjunct τ where
+    filterHead query (Adjunct₂ head) = filterHead query head
+    filterHead query (Adjunct₁ head) = filterHead query head
+    filterHead query (Adjunct₀ head) = []
+instance FilterHead Complement τ where
+    filterHead query (Complement₂ head) = filterHead query head
+    filterHead query (Complement₁ head) = filterHead query head
+    filterHead query (Complement₀ head) = []
+instance FilterHead α τ ⇒ FilterHead [α] τ where
+    filterHead query = (≫= filterHead query) -}
 
-
-instance Family BlaFamily where
-    decEq Bla' Bla' = Just (Refl, Refl)
-    decEq Ble' Ble' = Just (Refl, Refl)
-    decEq _    _    = Nothing
-
-    fields Bla' Bla = Just CNil
-    fields Ble' Ble = Just CNil
-    fields _    _   = Nothing
-
-    apply Bla' _     = Bla
-    apply Ble' _     = Ble
-
-    string Bla' = "Bla"
-    string Ble' = "Ble"
 
 ----------------------
 -- Parsing helpers. --
@@ -238,7 +269,7 @@ ip = do
 ibar ∷ ReadP IBar
 ibar = do
   -- This always leaves the specifier and adjunct empty.
-  complement ← vp -- ⧻ cp ∷ ∀h . ReadP (XP h)
+  complement ← vp
   return $ XBarₘ tense [Complement₂ complement]
 
 tense ∷ ILex
@@ -264,7 +295,9 @@ vp = do
 vbar ∷ ReadP VBar
 vbar = do
   vhead ← verb
-  complement ← option Nothing (Just ⦷ (Complement₂ ⦷ np) ⧻ (Complement₂ ⦷ cp) ⧻ (Complement₂ ⦷ pp))
+  complement ← option Nothing (Just ⦷ (Complement₂ ⦷ np) ⧻
+                                       (Complement₂ ⦷ cp) ⧻
+                                       (Complement₂ ⦷ pp))
   return $ maybe (XBar vhead) (\comp → XBarₘ vhead [comp]) complement
 
 
@@ -284,7 +317,7 @@ type NLex = X N
 
 
 np ∷ ReadP NP
-np = (np ⧻ nps)
+np = np ⧻ nps
     where
       np = do
         spec ← option Nothing (fmap (Just ∘ Specifier₀) det)
@@ -303,19 +336,19 @@ nbar = withAdj ⧻ nbarʹ
     where
       nbarʹ = do
         nhead ← noun
-        complement ← do
-                ad ← option [] (pure ∘ Complement₂ ⦷ adjp)
-                p  ← option [] (pure ∘ Complement₂ ⦷ pp)
-                c  ← option [] (pure ∘ Complement₂ ⦷ cp)
-                return (ad ⧺ p ⧺ c)
+        complement₁ ← option [] $ (pure ∘ Complement₂ ⦷ adjp) +≫
+                                    (pure ∘ Complement₂ ⦷ pp)
+        complement₂ ← option [] (pure ∘ Complement₂ ⦷ cp)
+        let complement = complement₁ ⧺ complement₂
 
-                          -- Only allow one CP for performance reasons
-                          -- Otherwise, the search space blows up
-                          -- insanely for the example sentence.
+                          -- Limit how many complements can appear in
+                          -- which sequence, because otherwise the
+                          -- search space blows up too much.
 
-        return $ if null complement
-                 then XBar nhead
-                 else XBarₘ nhead complement
+        return $
+          if null complement
+            then XBar nhead
+            else XBarₘ nhead complement
 
       withAdj ∷ ReadP NBar
       withAdj = do
