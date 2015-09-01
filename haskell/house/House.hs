@@ -1,20 +1,24 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE DeriveFoldable     #-}
-{-# LANGUAGE DeriveFunctor      #-}
-{-# LANGUAGE DeriveTraversable  #-}
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE UndecidableInstances  #-}
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE KindSignatures  #-}
-{-# LANGUAGE TypeFamilies  #-}
-{-# LANGUAGE TemplateHaskell  #-}
-{-# LANGUAGE UnicodeSyntax      #-}
-{-# LANGUAGE ExistentialQuantification      #-}
-{-# LANGUAGE StandaloneDeriving      #-}
+{-# LANGUAGE DataKinds                 #-}
+{-# LANGUAGE ViewPatterns                 #-}
+{-# LANGUAGE RecursiveDo                 #-}
+{-# LANGUAGE DeriveDataTypeable        #-}
+{-# LANGUAGE DeriveFoldable            #-}
+{-# LANGUAGE DeriveFunctor             #-}
+{-# LANGUAGE DeriveGeneric             #-}
+{-# LANGUAGE DeriveTraversable         #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE KindSignatures            #-}
+{-# LANGUAGE RankNTypes                #-}
+{-# LANGUAGE ScopedTypeVariables       #-}
+{-# LANGUAGE StandaloneDeriving        #-}
+{-# LANGUAGE FlexibleInstances        #-}
+{-# LANGUAGE TemplateHaskell           #-}
+{-# LANGUAGE TypeFamilies              #-}
+{-# LANGUAGE UndecidableInstances      #-}
+{-# LANGUAGE UnicodeSyntax             #-}
 
 module House (rhyme) where
 
@@ -22,19 +26,22 @@ import           Control.Applicative          hiding (many, optional, some)
 import           Control.Applicative.Unicode
 import           Control.Monad
 import           Control.Monad.Unicode
+import           Data.Generic.Diff hiding (string)
+import qualified Data.Generic.Diff as Diff
 import           Data.Char
-import Data.Functor
 import           Data.Data
+import           Data.Functor
 import           Data.List
 import           Data.Maybe
 import           Data.Monoid.Unicode
+import           Data.Singletons
+import           Data.Singletons.TH
+import           Debug.Trace
+import           GHC.Generics
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
 import           Text.ParserCombinators.ReadP
-import GHC.Generics
-import Data.Singletons
-import Data.Singletons.TH
-import Debug.Trace
+import  Text.Printf
 
 
 rhyme = undefined
@@ -61,15 +68,14 @@ target = concat ∘ intersperse " " $ [
 -- A toy grammar framework. --
 ------------------------------
 
-
 singletons [d|
-    data Head = Det | N | P | V | I | Coord | Subord | Adj | Adv deriving Show
+    data Head = Det | N | P | V | I | Coord | Subord | Adj | Adv
+        deriving Show
  |]
 
 
 data XP (head∷Head) = XP (XBar head)
-                    | ∀ (specifier∷Head) .
-                      XPₛ (Specifier) (XBar head)
+                    | ∀ (specifier∷Head) . XPₛ (Specifier) (XBar head)
                     | XPₐ (XP head) (X Coord) (XP head)
 data XBar (head∷Head) = XBar (X head)
                       | XBarₘ (X head) [Complement]
@@ -78,20 +84,20 @@ data XBar (head∷Head) = XBar (X head)
 data X (head∷Head) = X String
 
 data Complement =
-     ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Complement₂ (XP   head)
-  |  ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Complement₁ (XBar head)
-  |  ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Complement₀ (X    head)
+    ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Complement₂ (XP   head)
+  | ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Complement₁ (XBar head)
+  | ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Complement₀ (X    head)
 
 data Specifier =
-    ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Specifier₂ (XP   head)
-  | ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Specifier₁ (XBar head)
-  | ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Specifier₀ (X    head)
+    ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Specifier₂ (XP   head)
+  | ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Specifier₁ (XBar head)
+  | ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Specifier₀ (X    head)
 
 
 data Adjunct =
-     ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Adjunct₂ (XP   head)
-  |  ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Adjunct₁ (XBar head)
-  |  ∀ (head∷Head) .  (SingI head, Show (Demote head)) ⇒ Adjunct₀ (X    head)
+    ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Adjunct₂ (XP   head)
+  | ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Adjunct₁ (XBar head)
+  | ∀ (head∷Head) . (SingI head, Show (Demote head)) ⇒ Adjunct₀ (X    head)
 
 instance Show Adjunct  where
     show (Adjunct₂ x) = show x
@@ -110,25 +116,63 @@ instance Show Specifier where
     show (Specifier₀ x) = show x
 
 instance (SingI head, Show (Demote head)) ⇒ Show (XP head) where
-    show (XP  head)      =  show head ⧺ " " ⧺
-                              show (fromSing (sing ∷ Sing head))
-    show (XPₛ spec head) = "((" ⧺ show spec ⧺ ")(" ⧺ show head ⧺ ")) " ⧺
-                             show (fromSing (sing ∷ Sing head)) ⧺ "P"
-    show (XPₐ l j r)     = "((" ⧺ show l ⧺ ") " ⧺ show j ⧺ " (" ⧺ show r ⧺ ")) "
-                             ⧺ show (fromSing (sing ∷ Sing head))
+    show (XP  head)      = printf "[ %sP %s ] "
+                             (show $ fromSing (sing ∷ Sing head))
+                             (show head)
+    show (XPₛ spec head) = printf "[%sP [ %s ][ %s ]]"
+                             (show $ fromSing (sing ∷ Sing head))
+                             (show spec) (show head)
+    show (XPₐ l j r)     = printf "[%sP [ %s ] %s [ %s ]]"
+                             (show $ fromSing (sing ∷ Sing head))
+                             (show l) (show j) (show r)
 
 instance (SingI head, Show (Demote head)) ⇒ Show (XBar head) where
-    show (XBar   head)       = show head ⧺ " " ⧺ show (fromSing (sing ∷ Sing head))
-    show (XBarₘ  head comps) = show head ⧺ " [" ⧺ (comps ≫= (⧺" ") ∘ show) ⧺ "]" ⧺ " " ⧺
-                                 show (fromSing (sing ∷ Sing head))
-    show (XBarₐ  head adj)   = show head ⧺ " ⟨" ⧺ show adj        ⧺ "⟩" ⧺ " " ⧺
-                                 show (fromSing (sing ∷ Sing head))
-    show (XBarₐʹ adj head)   = "⟨" ⧺ show adj  ⧺ "⟩ " ⧺ show head ⧺ " " ⧺
-                                 show (fromSing (sing ∷ Sing head))
+    show (XBar   head)       = printf "[%sˈ %s ]"
+                                 (show $ fromSing (sing ∷ Sing head))
+                                 (show head)
+    show (XBarₘ  head comps) = printf "[%sˈ %s [ %s ]]"
+                               (show $ fromSing (sing ∷ Sing head))
+                               (show head) (comps ≫= (⧺" ") ∘ show)
+    show (XBarₐ  head adj)   = printf "[%sˈ %s [ %s ]]"
+                                 (show $ fromSing (sing ∷ Sing head))
+                                 (show head) (show adj)
+    show (XBarₐʹ adj head)   = printf "[%sˈ [ %s ] %s]"
+                                 (show $ fromSing (sing ∷ Sing head))
+                                 (show adj) (show head)
 
 instance (SingI head, Show (Demote head)) ⇒ Show (X head) where
-    show (X s) = s⧺ " " ⧺ show (fromSing (sing ∷ Sing head))
+    show (X s) = printf "[ %s \"%s\" ]" (show $ fromSing (sing ∷ Sing head)) s
 
+
+--------------------
+-- Diffing trees. --
+--------------------
+
+data Bla = Bla | Ble deriving (Generic, Data, Typeable)
+
+data BlaFamily ∷ * → * → * where
+    Bla' ∷ BlaFamily Bla Nil
+    Ble' ∷ BlaFamily Bla Nil
+
+
+instance Type BlaFamily Bla where
+    constructors = [Concr Bla', Concr Ble']
+
+
+instance Family BlaFamily where
+    decEq Bla' Bla' = Just (Refl, Refl)
+    decEq Ble' Ble' = Just (Refl, Refl)
+    decEq _    _    = Nothing
+
+    fields Bla' Bla = Just CNil
+    fields Ble' Ble = Just CNil
+    fields _    _   = Nothing
+
+    apply Bla' _     = Bla
+    apply Ble' _     = Ble
+
+    string Bla' = "Bla"
+    string Ble' = "Ble"
 
 ----------------------
 -- Parsing helpers. --
@@ -188,7 +232,8 @@ ip ∷ ReadP IP
 ip = do
   spec  ← (Just ∘ Specifier₂ ⦷ np) ⧻ return Nothing
   ihead ← ibar
-  return $ maybe (XPₛ (Specifier₀ (X "trace" ∷ X 'N)) ihead) (`XPₛ` ihead) spec
+  return $ maybe (XPₛ (Specifier₀ (X "(trace)" ∷ ILex)) ihead)
+             (`XPₛ` ihead) spec
 
 ibar ∷ ReadP IBar
 ibar = do
@@ -197,7 +242,7 @@ ibar = do
   return $ XBarₘ tense [Complement₂ complement]
 
 tense ∷ ILex
-tense = X ""
+tense = X "(tense)"
 
 
 -------------------------
@@ -258,9 +303,16 @@ nbar = withAdj ⧻ nbarʹ
     where
       nbarʹ = do
         nhead ← noun
-        complement ← many $ (Complement₂ ⦷ pp) ⧻
-                            (Complement₂ ⦷ cp) ⧻
-                            (Complement₂ ⦷ adjp)
+        complement ← do
+                ad ← option [] (pure ∘ Complement₂ ⦷ adjp)
+                p  ← option [] (pure ∘ Complement₂ ⦷ pp)
+                c  ← option [] (pure ∘ Complement₂ ⦷ cp)
+                return (ad ⧺ p ⧺ c)
+
+                          -- Only allow one CP for performance reasons
+                          -- Otherwise, the search space blows up
+                          -- insanely for the example sentence.
+
         return $ if null complement
                  then XBar nhead
                  else XBarₘ nhead complement
