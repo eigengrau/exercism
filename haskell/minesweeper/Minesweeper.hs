@@ -1,29 +1,186 @@
 {-# LANGUAGE DeriveFoldable    #-}
 {-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedLists   #-}
+{-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE UnicodeSyntax     #-}
+{-# LANGUAGE ViewPatterns      #-}
 
 
 module Minesweeper (annotate) where
 
+import           Control.Applicative.Unicode
+import           Control.Comonad
+import           Control.Monad.Unicode
+import           Data.Either
+import           Data.Foldable               hiding (toList)
+import           Data.List.Split
+import           Data.Sequence               (Seq)
+import qualified Data.Sequence               as Seq
+import           Data.Sequence.Unicode
+import           GHC.Exts
 import           Prelude.Unicode
-import Data.List
-import Control.Comonad
-import Control.Comonad.Trans.Class
-import Prelude.Unicode.SR
+import           Prelude.Unicode.SR
 
 
-type Board α = Row (Row α)
-type Piece = Char
+------------
+-- Types. --
+------------
 
 data Mine = Mine deriving Show
+type MineSweeperField = Either Mine Int
+type MineSweeperBoard = Board MineSweeperField
 
-testBoard ∷ [String]
-testBoard = [ " 2*2 ",
-              "25*52",
-              "*****",
-              "25*52",
-              " 2*2 " ]
+
+data Board α = Board {
+      boardRows  ∷ Seq (Seq α),
+      boardFocus ∷ (Int,Int)
+    } deriving (Functor, Foldable, Traversable)
+
+
+instance {-# OVERLAPPABLE #-} Show α ⇒ Show (Board α) where
+
+    show board = fold (rows ≫= (⊳"\n"))
+
+        where
+          rows = boardRows (fmap show board)
+
+
+instance {-# OVERLAPPING #-} Show MineSweeperBoard where
+
+    show board = fold (rows ≫= (⊳"\n"))
+
+        where
+          rows = boardRows (fmap showField board)
+          showField (Left Mine) = "*"
+          showField (Right c)   = show c
+
+
+instance Show (Board MineSweeperBoard) where
+
+    show = foldMap (⧺"\n") ∘ fmap show
+
+
+instance Read MineSweeperBoard where
+
+    readsPrec _ boardString = [(Board board (0,0), "")]
+
+        where
+          board = fromList $ fmap (fromList ∘ readLine) (lines boardString)
+
+          readLine     = fmap readChar
+          readChar '*' = Left Mine
+          readChar _   = Right 0
+
+
+instance Comonad Board where
+
+    extract board@Board{..} =
+        (boardRows `Seq.index` rowFocus board) `Seq.index` colFocus board
+
+    duplicate board@Board{..} = Board subBoards (rowFocus board, colFocus board)
+
+        where
+          allFoci   = (,) ⦷ [0..pred (boardWidth board)] ⊛
+                        [0..pred (boardHeight board)]
+          subBoards = fromList ∘ fmap fromList ∘ chunksOf (boardWidth board) $
+                        fmap (Board boardRows) allFoci
+
+
+----------------------
+-- Cursor movement. --
+----------------------
+
+-- | Move focus absolutely.
+setFocus ∷ (Int,Int) → Board α → Board α
+setFocus (col,row) Board{..} = Board boardRows (col,row)
+
+
+-- | Move focus relatively.
+boardGo ∷ (Int,Int) → Board α → Board α
+boardGo (col,row) board =
+    setFocus (colFocus board + col, rowFocus board + row) board
+
+
+-- | Predefined movements.
+boardLeft, boardRight, boardUp, boardDown ∷ Board α → Board α
+boardRight = boardGo ( 1, 0)
+boardLeft  = boardGo (-1, 0)
+boardDown  = boardGo ( 0, 1)
+boardUp    = boardGo ( 0,-1)
+
+
+----------------------
+-- Querying boards. --
+----------------------
+
+rowFocus, colFocus ∷ Board α → Int
+rowFocus Board{..} = snd boardFocus
+colFocus Board{..} = fst boardFocus
+
+
+boardNull ∷ Board α → Bool
+boardNull Board{..} = Seq.null boardRows
+
+
+boardWidth, boardHeight ∷ Board α → Int
+boardHeight = Seq.length ∘ boardRows
+boardWidth  = Seq.length ∘ (`Seq.index` 0) ∘ boardRows
+
+
+surroundings ∷ Board α → [α]
+surroundings board@Board{..} = foldMap ((:[]) ∘ extract) surroundingsʹ
+
+    where
+      surroundingsʹ = fmap (`boardGo` board) steps
+      dirs  = [-1,0,1]
+      steps = filter inBounds ((,) ⦷ dirs ⊛ dirs)
+      inBounds ((colFocus board +) → x, (rowFocus board +) → y) =
+          x ≥ 0 ∧ x < boardWidth  board ∧
+          y ≥ 0 ∧ y < boardHeight board
+
+
+countMines ∷ MineSweeperBoard → Either Mine Int
+countMines board = case extract board of
+                     Right _    → Right (length ∘ lefts ∘ surroundings $ board)
+                     Left  Mine → Left Mine
+
+
+--------------------------
+-- Constructing boards. --
+--------------------------
+
+readBoard ∷ [String] → MineSweeperBoard
+readBoard = read ∘ ((⧺"\n") =≪)
+
+
+annotate ∷ [String] → [String]
+annotate (readBoard → board)
+    | boardNull board = []
+    | otherwise       = (lines ∘ fmap (replace '0' ' ') ∘ show)
+                          (board =≫ countMines)
+    where
+      replace a b i
+          | i ≡ a     = b
+          | otherwise = i
+
+
+----------------
+-- Utilities. --
+----------------
+
+(=≫) ∷ Comonad ω ⇒ ω α → (ω α → β) → ω β
+(=≫) = (=>>)
+infixl 1 =≫
+
+
+------------------
+-- Test boards. --
+------------------
+
+surrounded, cross ∷ [String]
 
 surrounded = [ "***"
              , "*8*"
@@ -36,100 +193,3 @@ cross = [ " 2*2 "
         , "25*52"
         , " 2*2 "
         ]
-
-readBoard ∷ [String] → Board (Either Mine Int)
-readBoard b = Row  [] (head rows) (tail rows)
-    where
-      rows = fmap readRow b
-      readRow p     = Row [] (head pieces) (tail pieces)
-          where pieces = (fmap readPiece) p
-      readPiece '*' = Left Mine
-      readPiece _   = Right 0
-
--- scanBoard ∷ Board (Either Mine Int) → Board (Either Mine Int)
--- scanBoard (Board rows) = Board pass₂
---     where
---       pass₁ = fmap scanRow rows
---       pass₂ = (transpose ∘ fmap scanRow ∘ transpose) pass₁
---       scanRow (Left Mine : Right b : cs) = Left Mine : Right (b+1) : scanRow cs
---       scanRow (Right a : bs@(Left Mine : _)) = Right (a+1) : scanRow bs
---       scanRow (a : bs) = a : scanRow bs
---       scanRow _ = []
-
-printBoard ∷ Board (Either Mine Int) → [String]
-printBoard = fmap printRow ∘ flatten
-    where
-      printRow = fmap printPiece
-      printPiece (Right x)   = head (show x)
-      printPiece (Left Mine) = '*'
-
-annotate ∷ [String] → [String]
-annotate = printBoard ∘ runCounts ∘ readBoard
-
-
--- http://blog.sigfpe.com/2006/12/evaluating-cellular-automata-is.html
-
-data Row α = Row [α] α [α]   -- [Left] Here [Right]
-    deriving Functor
-
-                  -- Note that notationally, the list of leftward
-                  -- items appears reversed. The left-neighbouring
-                  -- item is the head of the list, and distance from
-                  -- the center increases as the list proceeds.
-
-instance Show α ⇒ Show (Row α) where
-    show (Row ls x rs) = "Row "                ⧺
-                            show (reverse ls)    ⧺
-                            " ⟨" ⧺ show x ⧺ "⟩ " ⧺
-                            show rs
-
-
-instance Comonad Row where
-   duplicate g@(Row l _ r) = Row
-                                (tail ∘ take (length l + 1) $ iterate left g)
-                                g
-                                (tail ∘ take (length r + 1) $ iterate right g)
-   extract (Row _ x _) = x
-
-
-right, left ∷ Row α → Row α
-right (Row as b (c:cs)) = Row (b:as) c cs
-right g                 = g
-left  (Row (a:as) b cs) = Row as a (b:cs)
-left  g                 = g
-
-testRow ∷ Row (Either Mine Int)
-testRow = Row [Left Mine, Right 0] (Left Mine) [Right 0, Right 0]
-
-count ∷ Row (Either Mine Int) → Either Mine Int
-count (Row (Left Mine:_) (Right x) (Left Mine:_)) = Right 2
-count (Row l             (Right x) (Left Mine:_)) = Right 1
-count (Row (Left Mine:_) (Right x) r)             = Right 1
-count (Row l             (Right x) r)             = Right x
-count (Row l x r)                                 = x
-
-testGrid ∷ Row (Row (Either Mine Int))
-testGrid = Row
-             [Row [] (Left Mine) [Right 0]]
-             (Row [] (Right 0) [Right 0])
-             [Row [] (Left Mine) [Right 0]]
-
---transposeGrid ∷ Row (Row α) → Row (Row α)
-transposeGrid g@(Row l x r) = newGrid
-    where
-      flatten (Row l x r) = l ⧺ x : r
-      flatGrid = (flatten ∘ fmap flatten) g
-      flatGridʹ = transpose flatGrid
-      newGrid = (mkRow ∘ fmap mkRow) flatGridʹ
-      mkRow (x:xs) = Row [] x xs
-
-
-flatten = flattenʹ ∘ fmap flattenʹ
-    where flattenʹ (Row l x r) = l ⧺ x : r
-
-runCounts = transposeGrid ∘ fmap (=>> count) ∘ transposeGrid ∘ fmap (=>> count)
-  -- TODO Diagonals
-
--- I need a 3 x 3 neighbour structure? Theoretically this could also
--- be broken down using the existing structure, by incrementally
--- shifting rows, counting, and shifting back.
