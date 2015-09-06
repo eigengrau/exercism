@@ -1,16 +1,21 @@
 {-# LANGUAGE DeriveFoldable    #-}
+{-# LANGUAGE RecordWildCards    #-}
 {-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedLists   #-}
-{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE QuasiQuotes   #-}
 {-# LANGUAGE UnicodeSyntax     #-}
+{-# LANGUAGE TypeFamilies     #-}
 {-# LANGUAGE ViewPatterns      #-}
 
 
 module Minesweeper (annotate) where
 
+import Control.Monad
+import Data.Maybe
 import           Control.Applicative.Unicode
 import           Control.Comonad
 import           Control.Monad.Unicode
@@ -21,8 +26,15 @@ import           Data.Sequence               (Seq)
 import qualified Data.Sequence               as Seq
 import           Data.Sequence.Unicode
 import           GHC.Exts
+import Data.Tuple
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
+import Control.Lens
+import Language.Haskell.Codo
+
+
+                            -- An alternative might have been to
+                            -- define a FunctorWithIndex instance.
 
 
 ------------
@@ -38,6 +50,13 @@ data Board α = Board {
       boardRows  ∷ Seq (Seq α),
       boardFocus ∷ (Int,Int)
     } deriving (Functor, Foldable, Traversable)
+
+
+instance Ixed (Board α) where
+    ix (x,y) f Board{..} = (`Board` boardFocus) ⦷ (ix x ∘ ix y) f boardRows
+
+type instance Index (Board α)   = (Int,Int)
+type instance IxValue (Board α) = α
 
 
 instance {-# OVERLAPPABLE #-} Show α ⇒ Show (Board α) where
@@ -83,8 +102,9 @@ instance Comonad Board where
     duplicate board@Board{..} = Board subBoards (rowFocus board, colFocus board)
 
         where
-          allFoci   = (,) ⦷ [0..pred (boardWidth board)] ⊛
-                        [0..pred (boardHeight board)]
+          allFoci   = flip (,) ⦷ [0..pred (boardHeight board)] ⊛
+                        [0..pred (boardWidth board)]
+
           subBoards = fromList ∘ fmap fromList ∘ chunksOf (boardWidth board) $
                         fmap (Board boardRows) allFoci
 
@@ -93,12 +113,15 @@ instance Comonad Board where
 -- Cursor movement. --
 ----------------------
 
--- | Move focus absolutely.
+-- | Move focus.
 setFocus ∷ (Int,Int) → Board α → Board α
-setFocus (col,row) Board{..} = Board boardRows (col,row)
+setFocus (col,row) board@Board{..} = Board boardRows (colʹ,rowʹ)
+    where
+      colʹ = col `mod` boardWidth  board
+      rowʹ = row `mod` boardHeight board
 
 
--- | Move focus relatively.
+-- | Move focus relative to current focus.
 boardGo ∷ (Int,Int) → Board α → Board α
 boardGo (col,row) board =
     setFocus (colFocus board + col, rowFocus board + row) board
@@ -111,6 +134,18 @@ boardLeft  = boardGo (-1, 0)
 boardDown  = boardGo ( 0, 1)
 boardUp    = boardGo ( 0,-1)
 
+bLeft  b
+    | colFocus b ≤ 0 = Nothing
+    | otherwise      = Just (extract $ boardLeft b)
+bRight b
+    | colFocus b ≥ pred (boardWidth b) = Nothing
+    | otherwise      = Just (extract $ boardRight b)
+bUp b
+    | rowFocus b ≤ 0 = Nothing
+    | otherwise      = Just (extract $ boardUp b)
+bDown b
+    | rowFocus b ≥ pred (boardHeight b) = Nothing
+    | otherwise      = Just (extract $ boardDown b)
 
 ----------------------
 -- Querying boards. --
@@ -129,17 +164,32 @@ boardWidth, boardHeight ∷ Board α → Int
 boardHeight = Seq.length ∘ boardRows
 boardWidth  = Seq.length ∘ (`Seq.index` 0) ∘ boardRows
 
+diags ∷ Board α → [α]
+diags = [codo| board ⇒
+   up   ← bUp board
+   (id → lu)   ← bLeft up
+   ru   ← bRight up
+   down ← bDown board
+   ld   ← bLeft down
+   rd   ← bRight down
+   fmap fromJust ∘ filter isJust $ fmap (join ∘ extract) [lu, ru, ld, rd]
+ |]
+
+straights ∷ Board α → [α]
+straights = [codo| board ⇒
+    up    ← bUp board
+    down  ← bDown board
+    left  ← bLeft board
+    right ← bRight board
+    fmap fromJust ∘ filter isJust $ fmap (extract) [up, down, left, right]
+  |]
 
 surroundings ∷ Board α → [α]
-surroundings board@Board{..} = foldMap ((:[]) ∘ extract) surroundingsʹ
-
-    where
-      surroundingsʹ = fmap (`boardGo` board) steps
-      dirs  = [-1,0,1]
-      steps = filter inBounds ((,) ⦷ dirs ⊛ dirs)
-      inBounds ((colFocus board +) → x, (rowFocus board +) → y) =
-          x ≥ 0 ∧ x < boardWidth  board ∧
-          y ≥ 0 ∧ y < boardHeight board
+surroundings = [codo| board =>
+    s ← straights board
+    d ← diags board
+    extract s ⧺ extract d
+  |]
 
 
 countMines ∷ MineSweeperBoard → Either Mine Int
