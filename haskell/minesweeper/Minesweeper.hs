@@ -1,40 +1,45 @@
 {-# LANGUAGE DeriveFoldable    #-}
-{-# LANGUAGE RecordWildCards    #-}
 {-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedLists   #-}
+{-# LANGUAGE QuasiQuotes       #-}
+{-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE TemplateHaskell   #-}
-{-# LANGUAGE QuasiQuotes   #-}
+{-# LANGUAGE TypeFamilies      #-}
 {-# LANGUAGE UnicodeSyntax     #-}
-{-# LANGUAGE TypeFamilies     #-}
 {-# LANGUAGE ViewPatterns      #-}
 
 
 module Minesweeper (annotate) where
 
-import Control.Monad
-import Data.Maybe
 import           Control.Applicative.Unicode
 import           Control.Comonad
+import           Control.Lens
+import           Control.Monad
 import           Control.Monad.Unicode
 import           Data.Either
 import           Data.Foldable               hiding (toList)
 import           Data.List.Split
+import           Data.Maybe
 import           Data.Sequence               (Seq)
 import qualified Data.Sequence               as Seq
 import           Data.Sequence.Unicode
+import           Data.Tuple
 import           GHC.Exts
-import Data.Tuple
+import           Language.Haskell.Codo
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
-import Control.Lens
-import Language.Haskell.Codo
 
 
-                            -- An alternative might have been to
-                            -- define a FunctorWithIndex instance.
+                            -- An alternative: just use seq. what
+                            -- would have been the drawback in that?
+
+                            -- I wonder whether any of the vanilla
+                            -- comonad instances would’ve subsumed
+                            -- this hand-rolled instance. Store
+                            -- comonad?
 
 
 ------------
