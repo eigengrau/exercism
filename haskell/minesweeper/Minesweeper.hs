@@ -139,13 +139,14 @@ bLeft  b
     | otherwise      = Just (extract $ boardLeft b)
 bRight b
     | colFocus b ≥ pred (boardWidth b) = Nothing
-    | otherwise      = Just (extract $ boardRight b)
+    | otherwise                        = Just (extract $ boardRight b)
 bUp b
     | rowFocus b ≤ 0 = Nothing
     | otherwise      = Just (extract $ boardUp b)
 bDown b
     | rowFocus b ≥ pred (boardHeight b) = Nothing
-    | otherwise      = Just (extract $ boardDown b)
+    | otherwise                         = Just (extract $ boardDown b)
+
 
 ----------------------
 -- Querying boards. --
@@ -164,31 +165,37 @@ boardWidth, boardHeight ∷ Board α → Int
 boardHeight = Seq.length ∘ boardRows
 boardWidth  = Seq.length ∘ (`Seq.index` 0) ∘ boardRows
 
+
 diags ∷ Board α → [α]
 diags = [codo| board ⇒
-   up   ← bUp board
-   (id → lu)   ← bLeft up
-   ru   ← bRight up
+   up ← bUp board
+   (join ∘ extract → lu) ← bLeft up
+   (join ∘ extract → ru) ← bRight up
+
    down ← bDown board
-   ld   ← bLeft down
-   rd   ← bRight down
-   fmap fromJust ∘ filter isJust $ fmap (join ∘ extract) [lu, ru, ld, rd]
+   (join ∘ extract → ld) ← bLeft down
+   (join ∘ extract → rd) ← bRight down
+
+   catMaybes [lu, ru, ld, rd]
  |]
+
 
 straights ∷ Board α → [α]
 straights = [codo| board ⇒
-    up    ← bUp board
-    down  ← bDown board
-    left  ← bLeft board
-    right ← bRight board
-    fmap fromJust ∘ filter isJust $ fmap (extract) [up, down, left, right]
+    (extract → up)    ← bUp board
+    (extract → down)  ← bDown board
+    (extract → left)  ← bLeft board
+    (extract → right) ← bRight board
+
+    catMaybes [up, down, left, right]
   |]
 
+
 surroundings ∷ Board α → [α]
-surroundings = [codo| board =>
-    s ← straights board
-    d ← diags board
-    extract s ⧺ extract d
+surroundings = [codo| board ⇒
+    (extract → s) ← straights board
+    (extract → d) ← diags board
+    s ⧺ d
   |]
 
 
