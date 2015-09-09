@@ -60,19 +60,32 @@ makeNet = do
   let netʹ = fmap (train net) digitSamples
   return netʹ
       where
-        initialNet = createNetwork 16 [12] 10
-        train = trainUntilErrorBelow 6 learnRate  tanh tanh'
-        learnRate  = 0.2
+        initialNet = createNetwork 16 [12] 11
+        -- train = trainUntilErrorBelow 6 learnRate  tanh tanh'
+        train = trainNTimes 10000 learnRate  tanh tanh'
+        learnRate  = 0.1
 
 -- Encode the digit font as a numeric vector and pair these up with target
 -- vectors to be learned.
 digitSamples ∷ Either String (Samples Double)
-digitSamples = zip ⦷ sequence inputs ⊛ pure targets
+digitSamples = do
+  samples ← zip ⦷ sequence inputs ⊛ pure targets
+  g ← garbled
+  return (samples ⧺ g)
 
     where
       inputs  = fmap encodeInput font
-      targets = fmap fromList ∘ take 10 $ iterate rotate (1 : replicate 9 0)
+      targets = fmap fromList ∘ take 10 ∘ fmap (⧺ [0]) $
+                  iterate rotate (1 : replicate 9 0)
+                          -- Always leave the last output 0. This will be used
+                          -- to detect garbled input.
       rotate l = last l : init l
+      garbled ∷ Either String [(Vector Double, Vector Double)]
+      garbled =  zip ⦷
+                   (sequence ∘ unsafePerformIO $ replicateM 10 makeGarbleVector) ⊛
+                   pure (repeat garbledTarget)
+      garbledTarget ∷ Vector Double
+      garbledTarget = fromList $ replicate 10 0 ⧺ [1]
 
 encodeInput ∷ String → Either String (Vector Double)
 encodeInput s
@@ -125,6 +138,10 @@ garble = unlines [
           , "   "
          ]
 
+makeGarbleVector ∷ IO (Either String (Vector Double))
+makeGarbleVector = do
+  garble ← generate $ makeGarble `suchThat` (\x → x ∉ font)
+  return $ encodeInput garble
 
 makeGarble = do
    lines ← replicateM 3 (vectorOf 3 digitElem)
