@@ -73,9 +73,9 @@ makeNet = do
   let netʹ = fmap (train net) digitSamples
   return netʹ
       where
-        initialNet = createNetwork 16 [12,12] 10
+        initialNet = createNetwork 16 [12,12,12] 10
         train = trainUntilErrorBelow 5 learnRate  tanh tanh'
-        -- train = trainNTimes 10000 learnRate  tanh tanh'
+        --train = trainNTimes 10000 learnRate  tanh tanh'
         learnRate  = 0.3
 
 -- Encode the digit font as a numeric vector and pair these up with target
