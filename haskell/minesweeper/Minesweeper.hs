@@ -25,27 +25,67 @@ import           Data.Maybe
 import           Data.Sequence               (Seq)
 import qualified Data.Sequence               as Seq
 import           Data.Sequence.Unicode
-import           Data.Tuple
 import           GHC.Exts
 import           Language.Haskell.Codo
 import           Prelude.Unicode
-import           Prelude.Unicode.SR
+import           Prelude.Unicode.SR          hiding ((‼))
 
 
-                            -- An alternative: just use seq. what
-                            -- would have been the drawback in that?
+----------------
+-- Rationale. --
+----------------
 
-                            -- I wonder whether any of the vanilla
-                            -- comonad instances would’ve subsumed
-                            -- this hand-rolled instance. Store
-                            -- comonad?
+-- While using a structure based on «Seq (Seq α)» would be sufficient to
+-- conveniently address and efficiently retrieve local neighbourhoods inside a
+-- larger, grid-like structure, I was eager to dabble with Comonads a bit.
+-- Having heard that a Comonadic interface expresses structurally local
+-- computations which depend on a global context, and having read an interesting
+-- blog post where Comonads were used to model the grid-like structure and
+-- bottom-up logics of cellular automata, the Minesweeper domain seemed like
+-- good fit to try defining a Comonad instance for this the minesweeper board.
+--
+-- The implementation is based on a comonadic interface to the game board data
+-- type, which is a grid represented as a «Seq (Seq α)». The game board type
+-- incorporates a notion of a /cursor/, which designates a focused position on
+-- the board.
+--
+--   • The value currently focused can be retrieved using the «extract»
+--     function.
+--
+--   • Applying «extend» to any function «GameBoard α → β» will turn that
+--     function into a function «GameBoard α → GameBoard β». The resulting
+--     function will run the original computation with the cursor set to each
+--     possible cell of the board, and then stitches local results back together
+--     into a coherent global structure. The operator =≫ is equivalent to «flip
+--     extend».
+--
+-- To illustrate: when «peekRight» is function which returns the cell to the
+-- right of the current cursor position, «gameBoard =≫ peekRight» designates the
+-- original gameBoard with each cell’s value replaced with the value to its
+-- right. Analogously, the following will draw an arrow pointing toward a mine
+-- to the right:
+--
+--     gameBoard =≫ \board →
+--       if (isMine ∘ peekRight) board
+--       then '→'
+--       else '_'
+--
+-- What this interface affords is that the «stiching back together» part is
+-- managed by the Comonad interface. Additionally, while an extended function
+-- can access the global environment, it can affect only the local substructure
+-- for which it is run.
+--
+-- Open questions:
+--
+-- • I wonder whether any of the vanilla Comonad instances would have subsumed
+--   this hand-rolled instance. Store comonad? Env?
 
 
 ------------
 -- Types. --
 ------------
 
-data Mine = Mine deriving Show
+data Mine = Mine deriving (Show, Eq)
 type MineSweeperField = Either Mine Int
 type MineSweeperBoard = Board MineSweeperField
 
@@ -53,7 +93,7 @@ type MineSweeperBoard = Board MineSweeperField
 data Board α = Board {
       boardRows  ∷ Seq (Seq α),
       boardFocus ∷ (Int,Int)
-    } deriving (Functor, Foldable, Traversable)
+    } deriving (Eq, Functor, Foldable, Traversable)
 
 
 instance Ixed (Board α) where
@@ -101,9 +141,11 @@ instance Read MineSweeperBoard where
 instance Comonad Board where
 
     extract board@Board{..} =
-        (boardRows `Seq.index` rowFocus board) `Seq.index` colFocus board
+        (boardRows ‼ rowFocus board) ‼ colFocus board
 
-    duplicate board@Board{..} = Board subBoards (rowFocus board, colFocus board)
+    -- | Duplication strategy: Set subordinate focus to the coordinates of the
+    -- superordinate cell.
+    duplicate board@Board{..} = Board subBoards (colFocus board, rowFocus board)
 
         where
           allFoci   = flip (,) ⦷ [0..pred (boardHeight board)] ⊛
@@ -131,27 +173,6 @@ boardGo (col,row) board =
     setFocus (colFocus board + col, rowFocus board + row) board
 
 
--- | Predefined movements.
-boardLeft, boardRight, boardUp, boardDown ∷ Board α → Board α
-boardRight = boardGo ( 1, 0)
-boardLeft  = boardGo (-1, 0)
-boardDown  = boardGo ( 0, 1)
-boardUp    = boardGo ( 0,-1)
-
-bLeft  b
-    | colFocus b ≤ 0 = Nothing
-    | otherwise      = Just (extract $ boardLeft b)
-bRight b
-    | colFocus b ≥ pred (boardWidth b) = Nothing
-    | otherwise                        = Just (extract $ boardRight b)
-bUp b
-    | rowFocus b ≤ 0 = Nothing
-    | otherwise      = Just (extract $ boardUp b)
-bDown b
-    | rowFocus b ≥ pred (boardHeight b) = Nothing
-    | otherwise                         = Just (extract $ boardDown b)
-
-
 ----------------------
 -- Querying boards. --
 ----------------------
@@ -167,46 +188,66 @@ boardNull Board{..} = Seq.null boardRows
 
 boardWidth, boardHeight ∷ Board α → Int
 boardHeight = Seq.length ∘ boardRows
-boardWidth  = Seq.length ∘ (`Seq.index` 0) ∘ boardRows
+boardWidth  = Seq.length ∘ (‼0) ∘ boardRows
 
 
-diags ∷ Board α → [α]
-diags = [codo| board ⇒
-   up ← bUp board
-   (join ∘ extract → lu) ← bLeft up
-   (join ∘ extract → ru) ← bRight up
+peekLeft, peekRight, peekUp, peekDown ∷ Board α → Maybe α
+peekLeft board
+    | colFocus board ≤ 0 = Nothing
+    | otherwise = Just (extract $ boardGo (-1, 0) board)
+peekRight board
+    | colFocus board ≥ pred (boardWidth board) = Nothing
+    | otherwise = Just (extract $ boardGo ( 1, 0) board)
+peekUp board
+    | rowFocus board ≤ 0 = Nothing
+    | otherwise = Just (extract $ boardGo ( 0,-1) board)
+peekDown board
+    | rowFocus board ≥ pred (boardHeight board) = Nothing
+    | otherwise = Just (extract $ boardGo ( 0, 1) board)
 
-   down ← bDown board
-   (join ∘ extract → ld) ← bLeft down
-   (join ∘ extract → rd) ← bRight down
+
+peekDiag ∷ Board α → [α]
+peekDiag = [codo| board ⇒
+   up ← peekUp board
+   (join ∘ extract → lu) ← peekLeft up
+   (join ∘ extract → ru) ← peekRight up
+
+   -- «join» is needed since each peek introduces another Maybe level.
+   -- TODO: Use ComonadTrans instead?
+
+   down ← peekDown board
+   (join ∘ extract → ld) ← peekLeft down
+   (join ∘ extract → rd) ← peekRight down
 
    catMaybes [lu, ru, ld, rd]
  |]
 
 
-straights ∷ Board α → [α]
-straights = [codo| board ⇒
-    (extract → up)    ← bUp board
-    (extract → down)  ← bDown board
-    (extract → left)  ← bLeft board
-    (extract → right) ← bRight board
+peekStraight ∷ Board α → [α]
+peekStraight = [codo| board ⇒
+    (extract → up)    ← peekUp board
+    (extract → down)  ← peekDown board
+    (extract → left)  ← peekLeft board
+    (extract → right) ← peekRight board
 
     catMaybes [up, down, left, right]
   |]
 
 
-surroundings ∷ Board α → [α]
-surroundings = [codo| board ⇒
-    (extract → s) ← straights board
-    (extract → d) ← diags board
+peekSurroundings ∷ Board α → [α]
+peekSurroundings = [codo| board ⇒
+    (extract → s) ← peekStraight board
+    (extract → d) ← peekDiag board
     s ⧺ d
   |]
 
 
+-- | Count the mines surrounding the focused cell.
 countMines ∷ MineSweeperBoard → Either Mine Int
-countMines board = case extract board of
-                     Right _    → Right (length ∘ lefts ∘ surroundings $ board)
-                     Left  Mine → Left Mine
+countMines board =
+    case extract board of
+      Right _    → Right ∘ length ∘ lefts ∘ peekSurroundings $ board
+      Left  Mine → Left Mine
 
 
 --------------------------
@@ -220,8 +261,8 @@ readBoard = read ∘ ((⧺"\n") =≪)
 annotate ∷ [String] → [String]
 annotate (readBoard → board)
     | boardNull board = []
-    | otherwise       = (lines ∘ fmap (replace '0' ' ') ∘ show)
-                          (board =≫ countMines)
+    | otherwise       = lines ∘ fmap (replace '0' ' ') ∘ show $
+                          board =≫ countMines
     where
       replace a b i
           | i ≡ a     = b
@@ -237,6 +278,10 @@ annotate (readBoard → board)
 infixl 1 =≫
 
 
+(‼) ∷ Seq α → Int → α
+(‼) = Seq.index
+
+
 ------------------
 -- Test boards. --
 ------------------
@@ -245,12 +290,10 @@ surrounded, cross ∷ [String]
 
 surrounded = [ "***"
              , "*8*"
-             , "***"
-             ]
+             , "***" ]
 
 cross = [ " 2*2 "
         , "25*52"
         , "*****"
         , "25*52"
-        , " 2*2 "
-        ]
+        , " 2*2 " ]
