@@ -1,133 +1,162 @@
+{-# LANGUAGE CPP              #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ParallelListComp #-}
 {-# LANGUAGE UnicodeSyntax    #-}
-{-# LANGUAGE ViewPatterns     #-}
 
-module OCR (convert) where
+module OCR (convert, convertNet) where
 
 import           AI.HNN.FF.Network
-import           Control.Applicative
-import           Control.Applicative.Unicode
-import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Trans.List
 import           Control.Monad.Unicode
-import           Data.Either.Combinators
 import           Data.List
 import           Data.List.Split
-import           Data.Map                    (Map)
-import qualified Data.Map                    as Map
-import           Data.Maybe
-import           Data.Vector.Storable        (Vector)
+import           Data.Map                 (Map)
+import qualified Data.Map                 as Map
+import           Data.Vector.Storable     (Vector)
 import           GHC.Exts
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
-import           Statistics.Sample
 import           System.IO.Unsafe
-import           Test.QuickCheck             hiding (output)
+import           System.Timeout
 
+
+-------------------------------------------------
+-- A wrapper around the chosen implementation. --
+-------------------------------------------------
 
 convert ∷ String → String
-convert input = intercalate "," $ do
-                  line ← chunkInput input
-                  let result = convert1 =≪ line
-                  return result
+
+#ifdef NEURALNET
+
+convert = unsafePerformIO ∘ convertNet
+
+#else
+
+convert = convertNorm
+
+#endif
 
 
-convert1 ∷ String → String
-convert1 input = maybe "?" show (Map.lookup input fontTable)
+-----------------
+-- Normal API. --
+-----------------
+
+-- | Recognize input.
+convertNorm ∷ String → String
+convertNorm input = intercalate "," convertedLines
+
+    where
+      convertedLines = do
+        line ← chunkInput input
+        let result = convertNorm1 =≪ line
+        return result
 
 
-net ∷ Network Double
-net = fromRight' ∘ unsafePerformIO ∘ runExceptT $ makeNet
+-- | Recognize one 16×16 block of input.
+convertNorm1 ∷ String → String
+convertNorm1 input = maybe "?" show (Map.lookup input fontTable)
 
 
+-------------------------
+-- Neural Network API. --
+-------------------------
+
+                                  -- As an alternative, this recognizes the
+                                  -- input using a neural network. Obviously,
+                                  -- this will also try to make sennse of
+                                  -- garbled input, so those tests will fail.
+
+
+-- | Recognize input using a neural network.
 convertNet ∷ String → IO String
-convertNet input = fmap (intercalate ",") ∘ runListT $ do
-                     line ← toListT $ chunkInput input
-                     let result = concat ⦷ mapM convertNet1 line
-                     lift result
+convertNet input = fmap (intercalate ",") convertedLines
+
+    where
+      convertedLines = runListT $ do
+                         line ← toListT $ chunkInput input
+                         let result = concat ⦷ mapM convertNet1 line
+                         lift result
 
 
+-- | Recognize one 16×16 block of input.
 convertNet1 ∷ String → IO String
 convertNet1 input = do
-  result ← runExceptT (runNet net input)
-  return $ case result of
-             Left  err     → err
-             Right (i,[_,_,skew])
-                 | i ≡ 10     → "?" --skew < 0.3 → "?"
-                 | otherwise  → show i
+
+  result ← runExceptT $ runNet network input
+  return $ either id show result
 
 
-comparison ∷ ExceptT String IO [(Int, [Double])]
-comparison = do
-  net ← makeNet
-  normal ← mapM (runNet net) font
-  garbled ← mapM (runNet net) garble
-  return $ normal ⧺ garbled
-
-
-evalNet ∷ ExceptT String IO Int
-evalNet = do
-  net ← makeNet
-  (fmap fst → inputs) ← digitSamples
-  let results = fmap (toList ∘ output net tanh) inputs
-  return $ maxIndex results
-
-
+-- | Recognizes the input string.
 runNet ∷ Monad μ
-       ⇒ Network Double
-       → String
-       → ExceptT String μ (Int, [Double])
-runNet net s = do
-  input ← encodeInput s
-  let result = output net tanh input
-  return (maxIndex (toList result),
-          [kurtosis result, stdDev result, skewness result])
+       ⇒ Network Double         -- ^ The network used for recognition.
+       → String                 -- ^ A 16×16 input character.
+       → ExceptT String μ Int
+
+runNet net input = do
+
+  encodedInput ← encodeInput input
+  let result = output net tanh encodedInput
+  return $ maxIndex (toList result)
+
+                                     -- Since the output vectors have one node
+                                     -- for each output number, we simply
+                                     -- retrieve the number by finding the index
+                                     -- of the maximally activated node.
 
 
-testNet ∷ Monad μ
-        ⇒ Network Double
-        → String
-        → ExceptT String μ [Double]
-testNet net s = do
-  input ← encodeInput s
-  return ∘ toList $ output net tanh input
+-- | A neural network to recognize character input. Globally initialized for
+-- memoization.
+network ∷ Network Double
+network = unsafePerformIO  $ do
+
+            net ← runExceptT makeNet
+            either withError return net
+
+    where
+      withError = error ∘ ("Error when instantiating neural network: " ⧺)
+
+{-# NOINLINE network #-}
 
 
+-- | Generates a neural network and trains it on the font data samples.
 makeNet ∷ ExceptT String IO (Network Double)
 makeNet = do
-  net ← lift initialNet
-  samples ← liftA2 (⧺) digitSamples garbleSamples
-  return $ train net samples
+
+  net      ← lift initialNet
+  samples  ← digitSamples
+  trained  ← lift $ timeout (timeoutSec↑6) (return $! train net samples)
+  toExceptT $ maybe (Left "timeout") Right trained
+
       where
-        initialNet = createNetwork 16 [12,12,12] 11
-        --train = trainUntilErrorBelow 5 learnRate  tanh tanh'
-        train = trainNTimes 10000 learnRate tanh tanh'
+        initialNet = createNetwork 16 [10] 10
+        train      = trainUntilErrorBelow 5 learnRate tanh tanh'
         learnRate  = 0.3
+        timeoutSec = 10
+                                  -- trainUntilError could be trapped in a
+                                  -- cycle, so we time it out.
 
 
 -- | Encode the digit font as a numeric vector and pair these up with target
 -- vectors to be learned.
 digitSamples ∷ Monad μ ⇒ ExceptT String μ (Samples Double)
 digitSamples = do
+
   inputs ← mapM encodeInput font
   return $ zip inputs targets
 
     where
-      targets = fmap (fromList ∘ (⧺[0])) ∘ take 10 $
+      targets = fmap fromList ∘ take 10 $
                   iterate rotate (1 : replicate 9 0)
       rotate l = last l : init l
 
 
-garbleSamples ∷ Monad μ ⇒ ExceptT String μ (Samples Double)
-garbleSamples = do
-  inputs ← mapM encodeInput garble
-  return $ zip inputs (repeat target)
-    where
-      target = fromList $ replicate 10 0 ⧺ [1]
+--------------------------------
+-- Shared functions and data. --
+--------------------------------
 
-
+-- | Encode a 16×16 block of input into a feature vector. Throws an error if the
+-- block is malformed.
 encodeInput ∷ Monad μ
             ⇒ String
             → ExceptT String μ (Vector Double)
@@ -136,13 +165,15 @@ encodeInput s
     | otherwise     = return $ fromList (fmap encodeChar s)
     where
       encodeChar ' ' = 0
-      encodeChar _   = 1
+      encodeChar  _  = 1
 
 
+-- | A lookup table which translates glyphs to numbers.
 fontTable ∷ Map String Int
 fontTable = Map.fromList (zip font [0..9])
 
 
+-- | An ASCII art font of digits.
 font ∷ [String]
 font = head ∘ chunkInput $ unlines [
         " _     _  _     _  _  _  _  _ ",
@@ -152,67 +183,40 @@ font = head ∘ chunkInput $ unlines [
        ]
 
 
+-- | Given a stream of ASCII art data, split the data up into visual lines and
+-- chunk each line into a 16×16 block.
 chunkInput ∷ String → [[String]]
 chunkInput input = fmap processRow rows
+
        where
+
+         -- TODO All the chunking in here is a bit unwieldy to read.
+
+         rows       = chunksOf 4 (lines input)
          processRow = process4 ∘ fmap (chunksOf 3)
-         process4 (l1:l2:l3:l4:ls) = [
+
+         process4 [l1,l2,l3,l4] = [
              unlines [a, b, c, d] | a ← l1
                                   | b ← l2
                                   | c ← l3
                                   | d ← l4
            ]
-         rows = chunksOf 4 (lines input)
+         process4 _ = error "chunkInput: invalid dimensions"
 
 
-maxIndex ∷ Ord α ⇒ [α] → Int
-maxIndex  xs = snd . minimumBy (flip compare) $ zip xs [0..]
 
-test ∷ String
-test = unlines [
-        "    _  _ ",
-        "  | _| _|",
-        "  ||_  _|",
-        "         ",
-        "    _  _ ",
-        "|_||_ |_ ",
-        "  | _||_|",
-        "         ",
-        " _  _  _ ",
-        "  ||_||_|",
-        "  ||_| _|",
-        "         "
-       ]
-
-garble = concat ∘ chunkInput ∘ unlines $ [
-          "    _  _ ",
-          "     | _ ",
-          "  ||_  _|",
-          "         ",
-          "    _  _ ",
-          "| ||  |_ ",
-          "  | _|  |",
-          "         ",
-          " _  _    ",
-          "    _|| |",
-          "  ||  |_|",
-          "         "
-         ]
-
-makeGarbleVector ∷ ExceptT String IO (Vector Double)
-makeGarbleVector = do
-  garble ← lift ∘ generate $ makeGarble `suchThat` (∉ font)
-  encodeInput garble
-
-
-makeGarble ∷ Gen String
-makeGarble = do
-   lines ← replicateM 3 (vectorOf 3 digitElem)
-   return $ unlines lines ⧺ "   \n"
-
-       where
-         digitElem = elements "|_ "
-
+----------------
+-- Utilities. --
+----------------
 
 toListT ∷ Monad μ ⇒ [α] → ListT μ α
 toListT = ListT ∘ return
+
+
+toExceptT ∷ Monad μ ⇒ Either α β → ExceptT α μ β
+toExceptT = ExceptT ∘ return
+
+
+-- | Retrieve the index of the maximal element.
+maxIndex ∷ Ord α ⇒ [α] → Int
+maxIndex xs = snd ∘ maximum $ zip xs [0..]
