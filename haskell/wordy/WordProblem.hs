@@ -7,16 +7,39 @@ import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Unicode
 import           Data.Char
-import           Data.Functor
-import           Debug.Trace
+import           Data.Monoid
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
-import           Text.ParserCombinators.ReadP    (char, endBy1, eof, get,
-                                                  manyTill, munch, munch1,
-                                                  satisfy, skipMany, skipSpaces,
-                                                  string)
+import           Text.ParserCombinators.ReadP    (char, eof, munch1, satisfy,
+                                                  skipSpaces, string)
 import qualified Text.ParserCombinators.ReadP    as ReadP
 import           Text.ParserCombinators.ReadPrec hiding (get)
+
+
+                           -- In addition to parsing only left-associatively,
+                           -- I’ve also added a precedence-based parser which
+                           -- binds multiplication and addition more tightly.
+                           --
+                           -- I thought before going for Parsec, I might try the
+                           -- parsing combinators included with base first.
+                           -- `ReadP` is decent by itself, and Hutton-style
+                           -- monadic parser combinators are nice, but the
+                           -- precedence-based version `ReadPrec` turned out to
+                           -- be a bit awkward. While I would have expected the
+                           -- precedence context to be maintained monadically,
+                           -- so that one would write `step n ≫ parseAction`,
+                           -- `step` is just a combinator instead, so that
+                           -- downstream parsers have to pass up the expected
+                           -- precedence levels manually.
+                           --
+                           -- Additionally, the precedence-based version has to
+                           -- do look-ahead on the input, while ReadP & co.
+                           -- provide no ready-made versions to perform
+                           -- conditional read-ahead based on self-defined
+                           -- parsers. Instead, it seems one has to consume
+                           -- characters and run the desired parser in an
+                           -- embedded fashion (for which `ReadP` doesn’t seem
+                           -- to provide any pre-defined means).
 
 
 ---------------------------------
@@ -43,24 +66,29 @@ eval (Div x y) = eval x `div` eval y
 -- Parsing complex expressions. --
 ----------------------------------
 
--- | Parse and evaluate a word problem.
+-- | Parse and evaluate a word problem using the default parser.
 answer ∷ String → Maybe Integer
-answer (fmap toLower → input)
+answer = answerWith exprL
+
+
+-- | Parse and evaluate a word problem using the provided parser.
+answerWith ∷ ReadPrec Expr → String → Maybe Integer
+answerWith parser (fmap toLower → input)
     | null result = Nothing
-    | otherwise   = let parse = (fst $ head result)
+    | otherwise   = let parse = fst (head result)
                     in Just (eval parse)
 
     where
       result  = readPrec_to_S runExpr 0 input
-      opener  = lift (void $ string "what is")
+      opener  = lift ∘ void $ string "what is"
       runExpr = do
 
         opener
         lift skipSpaces
-        exp ← exprL
-        optional (lift $ char '?')
+        expr ← parser
+        optional ∘ lift $ char '?'
         lift eof
-        return exp
+        return expr
 
 
 -- | This parses the word problem under the assumption that all operations
@@ -80,19 +108,20 @@ exprL = number +≫ do
 expr ∷ ReadPrec Expr
 expr = number +≫ do
 
-         -- This has to consume tokens instead of expressions first, since
-         -- otherwise we would recur infinitely.
-         left      ← some token
-         (stp, op) ← operator
-         right     ← some token
+         -- This has to do look-head for an operator, to ensure that parsing the
+         -- left and right context will termitate.
+         left       ← some token
+         (prec, op) ← operator
+         right      ← some token
 
-         -- Determine the appropriate action on precedence.
-         let doStp = if stp > 0 then step else id
+         -- Set how the precedence context will be increased based on the
+         -- precedence the operator demands.
+         let stepUp = appEndo $ foldMap Endo (replicate prec step)
 
-         -- Now that we’ve consumed an amount of tokens, we can feed the to the
-         -- expr parser without infinite recursion.
-         lExp  ← doStp $ embed expr (unwords left)
-         rExp  ← doStp $ embed expr (unwords right)
+         -- Recurse into the left and right context. Since we’ve already
+         -- consumed the characters, we must «embed» the expression parser.
+         lExp  ← stepUp $ embed expr (unwords left)
+         rExp  ← stepUp $ embed expr (unwords right)
 
          return (op lExp rExp)
 
@@ -102,9 +131,11 @@ expr = number +≫ do
 ----------------------------------
 
 operator ∷ ReadPrec (Prec, Expr → Expr → Expr)
-operator = add +≫ sub +≫ mul +≫ div
+operator = msum [add, sub, mul, div]
 
     where
+      -- Addition and subtraction are blocked when a multiplication/division
+      -- expression is being parsed.
       add = prec 0 ∘ lift $ asToken "plus"          ≫ return (0,Add)
       sub = prec 0 ∘ lift $ asToken "minus"         ≫ return (0,Sub)
       mul =          lift $ asToken "multiplied by" ≫ return (1,Mul)
@@ -114,9 +145,11 @@ operator = add +≫ sub +≫ mul +≫ div
 number ∷ ReadPrec Expr
 number = do
 
-  isNeg ← lift (char '-' ≫ return True) <++ return False
+  isNeg    ← lift (char '-' ≫ return True) <⧺ return False
   numChars ← lift $ munch1 isNumber
-  lift (skipSpaces +≫ eof +≫ void (char '?'))
+
+  lift $ skipSpaces +≫ eof +≫ void (char '?')
+
   let num = if isNeg
             then negate (read numChars)
             else read numChars
@@ -160,3 +193,6 @@ embed parser input = readP_to_Prec $ \prec →
      then ReadP.pfail
      else ReadP.choice $ fmap (return ∘ fst) result
 
+
+(<⧺) ∷ ReadPrec α → ReadPrec α → ReadPrec α
+(<⧺) = (<++)
