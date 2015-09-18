@@ -8,8 +8,9 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
-module Deque (mkDeque, push, pop, shift, unshift) where
+module Main (mkDeque, push, pop, shift, unshift, main) where
 
 
 import Debug.Trace
@@ -25,6 +26,10 @@ import Data.Typeable
 import Test.QuickCheck
 import GHC.Generics
 import Test.QuickSpec
+import Data.Maybe
+import Text.Printf
+import Criterion.Main
+import Control.DeepSeq
 
 
 data Deque α = Deque {
@@ -32,7 +37,7 @@ data Deque α = Deque {
       dequeFront ∷ [α],
       backLen    ∷ Int,
       dequeBack  ∷ [α]
-    } deriving (Show, Generic, Typeable)
+    } deriving (Show, Generic, Typeable, NFData)
 
 instance Eq α ⇒ Eq (Deque α) where
 
@@ -44,17 +49,44 @@ instance Ord α ⇒ Ord (Deque α) where
     Deque _ f₁ _ b₁ `compare` Deque _ f₂ _ b₂ =
         (f₁ ⧺ reverse b₁) `compare` (f₂ ⧺ reverse b₂)
 
-instance Arbitrary α ⇒ Arbitrary (Deque α) where
+-- instance NFData α ⇒ NFData (Deque α) where
+--     rnf (Deque f front b back) = 
+
+instance (Arbitrary α, Show α) ⇒ Arbitrary (Deque α) where
 
     arbitrary = do
-      front ← arbitrary
-      back  ← arbitrary
-      return ∘ rebalance $ Deque (length front) front (length back) back
+                                       -- We’re just using user-facing API to
+                                       -- create arbitrary lists. E. g., this
+                                       -- ascertains that the generates deques
+                                       -- are in various states of imbalance.
+
+      adds  ← listOf $ do
+                  fun ← elements [pushʹ, unshiftʹ]
+                  val ← arbitrary
+                  return (`fun` val)
+
+      removes ← listOf $ do
+                  fun ← elements [popʹ, shiftʹ]
+                  let funʹ deque = maybe deque fst (fun deque)
+                  return funʹ
+
+      ops ← shuffle (adds ⧺ removes)
+
+      let deque = foldl (flip ($)) empty ops
+      return deque
 
     shrink = fmap (rebalance ∘ correctLength) ∘ genericShrink
         where
           correctLength (Deque _ front _ back) =
               Deque (length front) front (length back) back
+
+-- | Length.
+dequeLength ∷ Deque α → Int
+dequeLength (Deque f _ b _) = f + b
+
+-- | Conversion.
+dequeToList ∷ Deque α → [α]
+dequeToList (Deque _ f _ b) = f ⧺ (reverse b)
 
 
 -- | The empty Deque.
@@ -116,6 +148,18 @@ shift ref = runMaybeT $ do
               liftIO $ writeIORef ref new
               return e
 
+peekHead ∷ Deque α → Maybe α
+peekHead (Deque _ (x : xs) _ _) = Just x
+peekHead (Deque _ [] _ [x])     = Just x
+peekHead _                      = Nothing
+
+peekLast ∷ Deque α → Maybe α
+peekLast (Deque _ _ _ (x : xs)) = Just x
+peekLast (Deque _ [x] _ [])     = Just x
+peekLast _                      = Nothing
+
+reverseDeque ∷ Deque α → Deque α
+reverseDeque (Deque f front l back) = Deque l back f front
 
 -- | Rebalance a deque when necessary.
 rebalance ∷ Deque α → Deque α
@@ -123,7 +167,7 @@ rebalance deque@(Deque frontLen front backLen back)
 
     | frontLen > 2 × backLen =
 
-        "Rebalance" `traceShow`
+--        "Rebalance" `traceShow`
 
           let (frontʹ, imbalance) = splitAt smaller front
               backʹ = back ⧺ reverse imbalance
@@ -131,7 +175,7 @@ rebalance deque@(Deque frontLen front backLen back)
 
     | backLen > 2 × frontLen =
 
-        "Rebalance" `traceShow`
+--        "Rebalance" `traceShow`
 
           let frontʹ = front ⧺ reverse imbalance
               (backʹ, imbalance) = splitAt smaller back
@@ -165,22 +209,97 @@ specs = quickSpec [
 
     "unshift" `fun2` (unshiftʹ ∷ Deque A → A → Deque A),
     "shift"   `fun1` (fmap fst ∘ shiftʹ ∷ Deque A → Maybe (Deque A)),
-    "shift"   `fun1` (fmap snd ∘ shiftʹ ∷ Deque A → Maybe A)
+    "shift"   `fun1` (fmap snd ∘ shiftʹ ∷ Deque A → Maybe A),
+
+    "fromList" `fun1` (mkDequeʹ ∷ [A] → Deque A),
+    "toList"   `fun1` (dequeToList ∷ Deque A → [A]),
+
+    "empty" `fun0` (empty ∷ Deque A),
+
+    "length" `fun1` (dequeLength ∷ Deque A → Int),
+
+    "rebalance" `fun1` (rebalance ∷ Deque A → Deque A),
+
+    "head" `fun1` (peekHead ∷ Deque A → Maybe A),
+    "last" `fun1` (peekLast ∷ Deque A → Maybe A),
+
+    "reverse"  `fun1` (reverseDeque ∷ Deque A → Deque A),
+    background $ "reverseL" `fun1` (reverse      ∷ [A] → [A])
   ]
 
 
 runTests ∷ IO ()
 runTests = quickCheckWith settings (conjoin props)
-    where
-      settings = stdArgs { maxSuccess = 500 }
-      props    = [ property prop_seq,
-                   property prop_popPush,
-                   property prop_shiftUnshift ]
 
-      prop_seq ∷ Deque A → A → A → Bool
-      prop_seq deque x y =
+    where
+      settings = stdArgs { maxSuccess = 1000 }
+      props    = [
+          label "seq"          $ property prop_seq,
+          label "popPush"      $ property prop_popPush,
+          label "shiftunshift" $ property prop_shiftUnshift,
+          label "conversionLD" $ property prop_conversion_ld,
+          label "conversionDL" $ property prop_conversion_dl,
+          label "unshiftDL"    $ property prop_unshift_dl,
+          label "unshiftLD"    $ property prop_unshift_ld,
+          label "pushLD"       $ property prop_push_ld,
+          label "pushDL"       $ property prop_push_dl,
+          label "rebalanceID"  $ property prop_balance_id,
+          label "frontLen"     $ property prop_frontlen,
+          label "backLen"      $ property prop_backlen
+        ]
+
+      prop_seq deque (x∷A) y =
           unshiftʹ (pushʹ deque x) y ≡ pushʹ (unshiftʹ deque y) x
 
-      prop_popPush, prop_shiftUnshift ∷ Deque A → A → Bool
-      prop_popPush deque x = popʹ (pushʹ deque x) ≡ Just (deque, x)
-      prop_shiftUnshift deque x = shiftʹ (unshiftʹ deque x) ≡ Just (deque, x)
+      prop_popPush      deque (x∷A) = popʹ   (pushʹ    deque x) ≡ Just (deque,x)
+      prop_shiftUnshift deque (x∷A) = shiftʹ (unshiftʹ deque x) ≡ Just (deque,x)
+
+      prop_conversion_ld (list∷[A]) =
+          dequeToList (mkDequeʹ list) ≡ list
+      prop_conversion_dl (deque∷Deque A) =
+          mkDequeʹ (dequeToList deque) ≡ deque
+
+      prop_unshift_dl d (x∷A) = x : dequeToList d   ≡ dequeToList (unshiftʹ d x)
+      prop_push_dl    d (x∷A) = dequeToList d ⧺ [x] ≡ dequeToList (pushʹ    d x)
+
+      prop_unshift_ld l (x∷A) = mkDequeʹ (x : l)   ≡ unshiftʹ (mkDequeʹ l) x
+      prop_push_ld    l (x∷A) = mkDequeʹ (l ⧺ [x]) ≡ pushʹ    (mkDequeʹ l) x
+
+      prop_balance_id (d ∷ Deque A) = d ≡ rebalance d
+
+      prop_frontlen (Deque _ (front ∷ [A]) _ back) =
+          length front > 0 ∨ length back ≤ 1
+      prop_backlen (Deque _ front _ (back ∷ [A])) =
+          length back > 0 ∨ length front ≤ 1
+
+benchmarks ∷ IO ()
+benchmarks = do
+--  deque30  ← generate (arbitrary `suchThat` ((>30)  ∘ dequeLength))
+--  deque300 ← generate (arbitrary `suchThat` ((>300) ∘ dequeLength))
+  deques ← generate (listOf arbitrary `suchThat` ((>10) ∘ length))
+  let op deque = pushʹ deque 5
+  defaultMain [ bgroup "deques"
+                [ bench "wip" $ nf op d
+                      | d ← take 5 (deques ∷ [Deque Int]) ]
+               ]
+  return ()
+
+    where
+      mkDeque len = mkDequeʹ [1..len]
+      doOps = generate $ do
+               adds  ← listOf $ do
+                         fun ← elements [pushʹ, unshiftʹ]
+                         val ← (arbitrary ∷ Gen Int)
+                         return (`fun` val)
+
+               removes ← listOf $ do
+                           fun ← elements [popʹ, shiftʹ]
+                           let funʹ deque = maybe deque fst (fun deque)
+                           return funʹ
+
+               ops ← shuffle (adds ⧺ removes)
+               let deque = foldl (flip ($)) empty ops
+               return ()
+
+main ∷ IO ()
+main = benchmarks
