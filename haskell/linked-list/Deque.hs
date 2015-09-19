@@ -6,7 +6,6 @@
 {-# LANGUAGE TupleSections       #-}
 {-# LANGUAGE TypeOperators       #-}
 {-# LANGUAGE UnicodeSyntax       #-}
-{-# LANGUAGE ViewPatterns        #-}
 
 module Deque where
 
@@ -16,12 +15,10 @@ import           Control.Monad
 import           Control.Monad.Loops
 import           Control.Monad.Trans
 import           Control.Monad.Trans.Maybe
-import           Control.Monad.Unicode
 import           Criterion.Main
 import           Data.IORef
 import qualified Data.List                   as List
 import           Data.Typeable
-import           Debug.Trace
 import           GHC.Generics
 import           Prelude                     hiding (head, last, length,
                                               reverse)
@@ -44,14 +41,17 @@ data Deque α = Deque {
 
 
 instance Eq α ⇒ Eq (Deque α) where
+
     Deque _ f₁ _ b₁ == Deque _ f₂ _ b₂ =
         f₁ ⧺ List.reverse b₁ ≡ f₂ ⧺ List.reverse b₂
 
 instance Ord α ⇒ Ord (Deque α) where
+
     Deque _ f₁ _ b₁ `compare` Deque _ f₂ _ b₂ =
         (f₁ ⧺ List.reverse b₁) `compare` (f₂ ⧺ List.reverse b₂)
 
 instance (Arbitrary α, Show α) ⇒ Arbitrary (Deque α) where
+
     arbitrary = sized dequeOf
 
 
@@ -126,7 +126,7 @@ popʹ (Deque _ _     _ []    ) = Nothing
 shiftʹ ∷ Deque α → Maybe (Deque α, α)
 shiftʹ (Deque f (x : xs) b back) = Just (rebalance $ Deque (pred f) xs b back, x)
 shiftʹ (Deque _ []       _ [x] ) = Just (rebalance $ Deque 0        [] 0 [],   x)
-shiftʹ (Deque _ []       _    _) = Nothing
+shiftʹ (Deque _ []       _ _   ) = Nothing
 
 
 -- | Reversal.
@@ -142,25 +142,20 @@ rebalance deque@(Deque frontLength front backLength back)
                               -- imbalance. For a 4/10 split, 3 units must be
                               -- moved over to the left, which means 3
                               -- constructors must be traversed in the right
-                              -- list, in order to split it (plus one time unit
-                              -- for the operation that triggered the
-                              -- rebalance). However, with a factor of 2, the
-                              -- next rebalance will only occur on 3/7, so that
-                              -- the cost of this 4 time-units operation must be
-                              -- seen in relation to a span of 4 time-units,
-                              -- making it linear.
+                              -- list in order to split it. However, with a
+                              -- factor of 2, the next rebalance will only occur
+                              -- on 3/7, so that the benefit of this 3
+                              -- time-units operation lasts for a span of 3
+                              -- time-units, making the operation ammortized
+                              -- constant time.
 
     | frontLength > factor × backLength =
-
-        -- "Rebalance" `traceShow`
 
         let (frontʹ, imbalance) = splitAt smaller front
             backʹ = back ⧺ List.reverse imbalance
         in Deque smaller frontʹ larger backʹ
 
     | backLength > factor × frontLength =
-
-        -- "Rebalance" `traceShow`
 
         let frontʹ = front ⧺ List.reverse imbalance
             (backʹ, imbalance) = splitAt smaller back
@@ -173,10 +168,6 @@ rebalance deque@(Deque frontLength front backLength back)
       smaller = (frontLength + backLength) `div` 2
       larger  = (frontLength + backLength) - smaller
 
-
-
--- Showing rebalancing over time (reactivate traceshow)
--- foldl1' (>=>) (replicate 50 (\s -> popʹ s >>= return . fst >>= \r -> (unsafePerformIO (myPrint r)) `seq` return r)) (fromList [1..50])
 
 -- Factor 2
 -- 100,100 … 49,100→75,74 … 36/74→55/55 … 27/55→41/41 … 20/41→31/30 … 14/30→22/22 … 10/22→16/16 … 7/16→12/11 … 5/11→8/8 … 3/8→6/5 … 2/5 → 4/3 … 1/3→2/2 … 0/2→1/1 …
@@ -350,36 +341,35 @@ runTests = quickCheckWith settings (conjoin props)
 
 benchmarks ∷ IO ()
 benchmarks = do
-                             -- 0. A deque can be popped/shifted from or
-                             -- unshifted/pushed to in constant time.
+                             -- Theorem: A deque can be popped/shifted from or
+                             -- unshifted/pushed to in constant time. In order
+                             -- to test this in a way that is sensitive to
+                             -- ammortization, we test the following two
+                             -- corrolaries.
                              --
-                             -- 1. A deque can be reduced to length 0 via random
-                             -- pop and shift in linear time.
+                             -- 1. A deque can be reduced to length 0 by popping
+                             -- from it, in linear time.
                              --
-                             -- 2. A deque can be expanded to length n via
-                             -- random pushes and unshifts in linear time.
+                             -- 2. A deque can be expanded to duplicate length
+                             -- via pushing, in linear time.
 
-  (force → deques) ← generate ∘ forM [2↑x | x ← [10..20]] $ \size → do
-                       deque ← dequeOf size ∷ Gen (Deque Int)
-                       return $ rebalance deque
+
+  let deques ∷ [Deque Int]
+      deques = force $ fmap (\len → fromList [1..len]) [2↑x | x ← [10..20]]
 
   defaultMain [
-      bgroup "eat"    [ bench (show $ length d) (nf eatDeque   d) | d ← deques ],
-      bgroup "double" [ bench (show $ length d) (nf doubleSize d) | d ← deques ]
+      bgroup "pop"  $ fmap (\d → bench (show $ length d) (nf consume d)) deques,
+      bgroup "push" $ fmap (\d → bench (show $ length d) (nf double  d)) deques
     ]
 
   return ()
 
       where
-        eatDeque = until (\d → length d ≡ 0) (\d → maybe d fst (popʹ d))
-
-        doubleSize deque = until (\d → length d ≡ 2×origSize)
-                             (`pushʹ` 1) deque
-            where
-              origSize = length deque
+        consume      = until ((≡0)            ∘ length) popMaybe
+        double deque = until ((≡2×origLength) ∘ length) (`pushʹ` 1) deque
+            where origLength = length deque
+        popMaybe d = maybe d fst (popʹ d)
 
 
 main ∷ IO ()
 main = benchmarks
-
-
