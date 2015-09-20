@@ -1,10 +1,8 @@
-{-# LANGUAGE DeriveAnyClass      #-}
+﻿{-# LANGUAGE DeriveAnyClass      #-}
 {-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TupleSections       #-}
-{-# LANGUAGE TypeOperators       #-}
 {-# LANGUAGE UnicodeSyntax       #-}
 
 module Deque where
@@ -26,6 +24,45 @@ import           Prelude.Unicode
 import           Prelude.Unicode.SR
 import           Test.QuickCheck
 import           Test.QuickSpec
+
+
+                        --------------------------------------------------------
+                        --
+                        -- Synopsis
+                        --
+                        -- Instead of opting for IO and MVars/STM, as suggested
+                        -- in the exercise, I thought I might try going for a
+                        -- purely functional O(1) deque instead. I came across
+                        -- something called a Banker’s deque, and pursued a
+                        -- naive implementation based on the underlying idea.
+                        -- The gist of it is that while not every operation is
+                        -- O(1), the algorithm will guarantee that any
+                        -- non-constant operation will ammortize after a fixed
+                        -- amount of subsequent operations.
+                        --
+                        -- For the Banker’s deque, which maintains two lists
+                        -- corresponding to the front resp. rear of the deque,
+                        -- we occasionally rebalance front and rear. This is a
+                        -- linear time operation (linear on the order of the
+                        -- degree of imbalance). We reverse part of the rear and
+                        -- add it to the front, or vice versa. Such a rebalance
+                        -- is triggered when one side of the deque is twice (or
+                        -- some other constant factor) the size of the other.
+                        --
+                        -- E.g., given a 50/100 split between front and rear,
+                        -- the next pop would cause 25 items to be moved over to
+                        -- the front, yielding a balanced 74/75 split. The
+                        -- associated list traversal and reversal consumes 25
+                        -- time units. However, if we go on popping from the
+                        -- deque, the next rebalance will only trigger after 25
+                        -- O(1) pops, so that the rebalance is guaranteed to
+                        -- ammortize into constant time.
+                        --
+                        -- Since my implementation is pretty naive and not a
+                        -- cookbook implementation the formalized Banker’s deque
+                        -- balancing algorithm, I set up a Criterion benchmark
+                        -- to validate if pop/push really run in ammortized
+                        -- constant time.
 
 
 ------------
@@ -59,12 +96,10 @@ instance (Arbitrary α, Show α) ⇒ Arbitrary (Deque α) where
 -- Querying Deques. --
 ----------------------
 
--- | Length.
 length ∷ Deque α → Int
 length (Deque f _ b _) = f + b
 
 
--- | Test for empty.
 null ∷ Deque α → Bool
 null (Deque 0 _ 0 _) = True
 null _               = False
@@ -86,17 +121,14 @@ last _                       = Nothing
 -- Construction. --
 -------------------
 
--- | Conversion.
 toList ∷ Deque α → [α]
 toList (Deque _ f _ b) = f ⧺ List.reverse b
 
 
--- | Conversion.
 fromList ∷ [α] → Deque α
 fromList l = rebalance $ Deque (List.length l) l 0 []
 
 
--- | The empty Deque.
 empty ∷ Deque α
 empty = Deque 0 [] 0 []
 
@@ -105,31 +137,27 @@ empty = Deque 0 [] 0 []
 -- Update. --
 -------------
 
--- | Insert value at back.
-pushʹ ∷ Deque α → α → Deque α
-pushʹ (Deque f front b back) e = rebalance $ Deque f front (succ b) (e : back)
-
-
--- | Insert value at front.
-unshiftʹ ∷ Deque α → α → Deque α
+-- | Insert value at rear/back.
+unshiftʹ, pushʹ ∷ Deque α → α → Deque α
+pushʹ    (Deque f front b back) e = rebalance $ Deque f front (succ b) (e : back)
 unshiftʹ (Deque f front b back) e = rebalance $ Deque (succ f) (e : front) b back
 
 
--- | Remove value at back.
+-- | Remove value from the rear.
 popʹ ∷ Deque α → Maybe (Deque α, α)
 popʹ (Deque f front b (x:xs)) = Just (rebalance $ Deque f front (pred b) xs, x)
 popʹ (Deque _ [x]   _ []    ) = Just (rebalance $ Deque 0 []    0        [], x)
 popʹ (Deque _ _     _ []    ) = Nothing
 
 
--- | Remove value at front.
+-- | Remove value from the front.
 shiftʹ ∷ Deque α → Maybe (Deque α, α)
 shiftʹ (Deque f (x : xs) b back) = Just (rebalance $ Deque (pred f) xs b back, x)
 shiftʹ (Deque _ []       _ [x] ) = Just (rebalance $ Deque 0        [] 0 [],   x)
 shiftʹ (Deque _ []       _ _   ) = Nothing
 
 
--- | Reversal.
+-- | O(1) reversal.
 reverse ∷ Deque α → Deque α
 reverse (Deque f front l back) = Deque l back f front
 
@@ -138,16 +166,16 @@ reverse (Deque f front l back) = Deque l back f front
 rebalance ∷ Deque α → Deque α
 rebalance deque@(Deque frontLength front backLength back)
 
-                              -- Balancing takes time linear to the amount of
-                              -- imbalance. For a 4/10 split, 3 units must be
-                              -- moved over to the left, which means 3
+                              -- Balancing takes time linear on the order of the
+                              -- degree of imbalance. For a 4/10 split, 3 units
+                              -- must be moved over to the left, which means 3
                               -- constructors must be traversed in the right
                               -- list in order to split it. However, with a
-                              -- factor of 2, the next rebalance will only occur
-                              -- on 3/7, so that the benefit of this 3
-                              -- time-units operation lasts for a span of 3
-                              -- time-units, making the operation ammortized
-                              -- constant time.
+                              -- factor of 2 triggering the rebalance, the next
+                              -- rebalance will only occur on 3/7, so that the
+                              -- benefit of this 3 time-unit operation lasts
+                              -- over a span of 3 time-units, making the
+                              -- operation ammortized constant time.
 
     | frontLength > factor × backLength =
 
@@ -157,8 +185,8 @@ rebalance deque@(Deque frontLength front backLength back)
 
     | backLength > factor × frontLength =
 
-        let frontʹ = front ⧺ List.reverse imbalance
-            (backʹ, imbalance) = splitAt smaller back
+        let (backʹ, imbalance) = splitAt smaller back
+            frontʹ = front ⧺ List.reverse imbalance
         in Deque larger frontʹ smaller backʹ
 
     | otherwise = deque
@@ -169,31 +197,29 @@ rebalance deque@(Deque frontLength front backLength back)
       larger  = (frontLength + backLength) - smaller
 
 
--- Factor 2
--- 100,100 … 49,100→75,74 … 36/74→55/55 … 27/55→41/41 … 20/41→31/30 … 14/30→22/22 … 10/22→16/16 … 7/16→12/11 … 5/11→8/8 … 3/8→6/5 … 2/5 → 4/3 … 1/3→2/2 … 0/2→1/1 …
--- Factor 4
--- 100,100 … 24/100→62/62 … 15/62→19/18 … 3/18→11/10 … 2/10→6/6 … 1/6→4/3 … 0/3→1/2 …
-
-
 -------------------------
 -- Proxy IO interface. --
 -------------------------
 
+                                       -- Only needed to fit in with the
+                                       -- exercism test suite
+
 shift ∷ IORef (Deque α) → IO (Maybe α)
 shift ref = runMaybeT $ do
+
               deque ← liftIO $ readIORef ref
-              (new,e) ← MaybeT (return (shiftʹ deque))
-              liftIO $ writeIORef ref new
-              return e
+              (dequeʹ,item) ← MaybeT (return (shiftʹ deque))
+              liftIO $ writeIORef ref dequeʹ
+              return item
 
 
 pop ∷ IORef (Deque α) → IO (Maybe α)
 pop ref = runMaybeT $ do
-            deque ← liftIO $ readIORef ref
-            (new,e) ← MaybeT (return (popʹ deque))
-            liftIO $ writeIORef ref new
-            return e
 
+            deque ← liftIO $ readIORef ref
+            (dequeʹ,item) ← MaybeT (return (popʹ deque))
+            liftIO $ writeIORef ref dequeʹ
+            return item
 
 
 mkDeque ∷ IO (IORef (Deque α))
@@ -215,33 +241,35 @@ unshift ref e = modifyIORef ref (`unshiftʹ` e)
 -- | Generate an arbitrary Deque of fixed size.
 dequeOf ∷ (Arbitrary α, Show α) ⇒ Int → Gen (Deque α)
 dequeOf n = do
-                                       -- We’re just using user-facing API to
-                                       -- create arbitrary lists. E. g., this
-                                       -- ascertains that the generates deques
-                                       -- are in various states of imbalance.
+                                       -- We’re just using user-facing API here.
+                                       -- Inter alia, this ascertains that the
+                                       -- generated deques are in various states
+                                       -- of imbalance.
 
       adds    ← listOf doAdd
       removes ← listOf doRemove
       ops     ← shuffle (adds ⧺ removes)
       let deque = foldl (flip ($)) empty ops
 
-      -- After random pushing & popping, we now make sure the finaly deque has
-      -- the desired size.
-      dequeʹ  ← iterateUntilM ((≥n) ∘ length) (\d → doAdd    ⊛ pure d) deque
-      dequeʹʹ ← iterateUntilM ((≤n) ∘ length) (\d → doRemove ⊛ pure d) dequeʹ
+                                      -- After random pushing & popping, we now
+                                      -- make sure the deque we return has the
+                                      -- desired size.
 
-      return dequeʹʹ
+      case compare (length deque) n of
+        EQ → return deque
+        LT → iterateUntilM ((≥n) ∘ length) (\d → doAdd    ⊛ pure d) deque
+        GT → iterateUntilM ((≤n) ∘ length) (\d → doRemove ⊛ pure d) deque
 
-          where
-            doAdd = do
-               fun ← elements [pushʹ, unshiftʹ]
-               val ← arbitrary
-               return (`fun` val)
+    where
+      doAdd = do
+        fun ← elements [pushʹ, unshiftʹ]
+        val ← arbitrary
+        return (`fun` val)
 
-            doRemove = do
-               fun ← elements [popʹ, shiftʹ]
-               let funʹ deque = maybe deque fst (fun deque)
-               return funʹ
+      doRemove = do
+        fun ← elements [popʹ, shiftʹ]
+        let funʹ deque = maybe deque fst (fun deque)
+        return funʹ
 
 
 ----------------
@@ -300,7 +328,7 @@ runTests = quickCheckWith settings (conjoin props)
       props    = [
           label "seq"          $ property prop_seq,
           label "popPush"      $ property prop_popPush,
-          label "shiftunshift" $ property prop_shiftUnshift,
+          label "shiftUnshift" $ property prop_shiftUnshift,
           label "conversionLD" $ property prop_conversion_ld,
           label "conversionDL" $ property prop_conversion_dl,
           label "unshiftDL"    $ property prop_unshift_dl,
@@ -342,9 +370,9 @@ runTests = quickCheckWith settings (conjoin props)
 benchmarks ∷ IO ()
 benchmarks = do
                              -- Theorem: A deque can be popped/shifted from or
-                             -- unshifted/pushed to in constant time. In order
-                             -- to test this in a way that is sensitive to
-                             -- ammortization, we test the following two
+                             -- unshifted/pushed to in amortzide constant time.
+                             -- In order to test this in a way that is sensitive
+                             -- to ammortization, we test the following two
                              -- corrolaries.
                              --
                              -- 1. A deque can be reduced to length 0 by popping
@@ -352,10 +380,6 @@ benchmarks = do
                              --
                              -- 2. A deque can be expanded to duplicate length
                              -- via pushing, in linear time.
-
-
-  let deques ∷ [Deque Int]
-      deques = force $ fmap (\len → fromList [1..len]) [2↑x | x ← [10..20]]
 
   defaultMain [
       bgroup "pop"  $ fmap (\d → bench (show $ length d) (nf consume d)) deques,
@@ -365,11 +389,36 @@ benchmarks = do
   return ()
 
       where
+        deques ∷ [Deque Int]
+        deques = force $ fmap (\len → fromList [1..len]) [2↑x | x ← [10..20]]
+
         consume      = until ((≡0)            ∘ length) popMaybe
         double deque = until ((≡2×origLength) ∘ length) (`pushʹ` 1) deque
             where origLength = length deque
+
         popMaybe d = maybe d fst (popʹ d)
 
 
 main ∷ IO ()
 main = benchmarks
+
+
+test ∷ Int → [α] → ([α], [α])
+test n l = (take n l, drop n l)
+
+intTest2 ∷ Int
+intTest2 = 5
+
+{-# NOINLINE test2 #-}
+{-# RULES "test2/int" test2 = intTest2 #-}
+test2 ∷ Num α ⇒ α
+test2 = 1
+
+test3 x = x
+
+
+
+-- Factor 2
+-- 100,100 … 49,100→75,74 … 36/74→55/55 … 27/55→41/41 … 20/41→31/30 … 14/30→22/22 … 10/22→16/16 … 7/16→12/11 … 5/11→8/8 … 3/8→6/5 … 2/5 → 4/3 … 1/3→2/2 … 0/2→1/1 …
+-- Factor 4
+-- 100,100 … 24/100→62/62 … 15/62→19/18 … 3/18→11/10 … 2/10→6/6 … 1/6→4/3 … 0/3→1/2 …
