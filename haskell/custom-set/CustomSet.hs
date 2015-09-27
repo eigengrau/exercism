@@ -1,28 +1,33 @@
-{-# LANGUAGE DeriveAnyClass     #-}
-{-# LANGUAGE ScopedTypeVariables     #-}
-{-# LANGUAGE BangPatterns     #-}
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE DeriveFoldable     #-}
-{-# LANGUAGE DeriveFunctor      #-}
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE DeriveGeneric      #-}
-{-# LANGUAGE TemplateHaskell      #-}
-{-# LANGUAGE PatternSynonyms    #-}
-{-# LANGUAGE UnicodeSyntax      #-}
+{-# LANGUAGE BangPatterns        #-}
+{-# LANGUAGE DeriveAnyClass      #-}
+{-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE DeriveFoldable      #-}
+{-# LANGUAGE DeriveFunctor       #-}
+{-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE PatternSynonyms     #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE UnicodeSyntax       #-}
 
 module CustomSet where
 
 import           Control.Applicative.Unicode
+import           Control.Applicative
+import           Control.Arrow
 import           Control.DeepSeq
 import           Control.Monad
+import           Control.Monad.Loops
 import           Control.Monad.Unicode
+import           Control.Monad.Writer
 import           Criterion.Main
 import           Data.Hashable
 import qualified Data.List                   as List
+import qualified Data.Tree                   as Tree
+import           Data.Tree.Pretty
 import           Data.Typeable
 import           Debug.Trace
 import           GHC.Generics
-import           OrPatterns
+import           GHC.GHCi.PPrint
 import           Prelude                     hiding (fromList, length)
 import           Prelude.Unicode
 import           Prelude.Unicode.SR
@@ -30,12 +35,7 @@ import           Test.QuickCheck
 import           Test.QuickCheck.Arbitrary
 import           Test.QuickCheck.Gen
 import           Test.QuickSpec
-import           Control.Monad.Writer
-import qualified Data.Tree as Tree
-import Data.Tree.Pretty
-import GHC.GHCi.PPrint
-import Control.Monad.Loops
-import Control.Arrow
+import GHC.List (foldl1')
 
 
 type Hash = Int
@@ -54,7 +54,7 @@ instance (Eq α, Ord α) ⇒ Eq (Set α) where
 instance (Ord α) ⇒ Ord (Set α) where
     s₁ `compare` s₂ = List.sort (toList s₁) `compare` List.sort (toList s₂)
 
-instance (Arbitrary α, Ord α) ⇒ Arbitrary (Set α) where
+instance (Arbitrary α, Ord α, Show α) ⇒ Arbitrary (Set α) where
     arbitrary = sized genSet
     shrink set = fromList ⦷ shrink (toList set)
 
@@ -108,7 +108,7 @@ delete v (Node c vʹ l r)
     | v > vʹ = Node c vʹ l (delete v r)
     | otherwise = impossible "delete"
 
-rbDelete ∷ Ord α ⇒ α → Set α → Set α
+rbDelete ∷ (Show α, Ord α) ⇒ α → Set α → Set α
 rbDelete _ Nil                = Nil
 rbDelete _ (Node _ _ Nil Nil) = Nil
 rbDelete v (Node c v₀ n@(Node c₁ v₁ l₁ r₁) Nil)
@@ -123,26 +123,51 @@ rbDelete v n@(Node c v₀ l@(Node c₁ v₁ l₁ r₁) r@(Node c₂ v₂ l₂ r�
     | v ≡ v₀ = let Node c₃ v₃ _ _  = rightMost l
                in case c of
                     Red   → Node c₃ v₃ (rbDelete v₃ l) r
-                    Black → absorb $ Node DBlack v₃ (rbDelete v₃ l) r
+                    Black → Node DBlack v₃ (rbDelete v₃ l) r
+                    _     → error "Imaginary color during rbDelete"
+    | otherwise = impossible "rbdelete"
 
-
-absorb ∷ Set α → Set α
+absorb ∷ (Show α, Ord α) ⇒ Set α → Set α
+absorb Nil = Nil
 absorb b@(RedN vb
          a@DBlackN{}
          d@(BlackN _
           c@BlackN{}
           e@BlackN{})) = BlackN vb a (paint Red d)
+absorb b@(RedN vb
+         d@(BlackN _
+          c@BlackN{}
+          e@BlackN{})
+         a@DBlackN{}) = BlackN vb (paint Red d) a
 absorb b@(BlackN vb
          a@DBlackN{}
          d@(BlackN _
           c@BlackN{}
           e@BlackN{})) = DBlackN vb a (paint Red d)
+absorb b@(BlackN vb
+         d@(BlackN _
+          c@BlackN{}
+          e@BlackN{})
+         a@DBlackN{}) = DBlackN vb (paint Red d) a
 absorb b@(RedN vb
          a@DBlackN{}
          d@(BlackN vd
           c@BlackN{}
-          e@RedN{})) = RedN vd (BlackN vb a c) (paint Black e)
-absorb n = n
+          e@RedN{})) = RedN vd (paint Black e) (BlackN vb a c)
+absorb b@(RedN vb
+         d@(BlackN vd
+          c@BlackN{}
+          e@RedN{})
+         a@DBlackN{}) = RedN vd (paint Black e) (BlackN vb a c)
+absorb (BlackN _
+         BlackN{}
+         (BlackN _
+           RedN{}
+           DBlackN{})) = undefined
+absorb n@DBlackN{} = n
+absorb n
+    | sum (colorCount DBlack n) ≢ 0 = error ("Not absorbed:" ⧺ show n)
+    | otherwise = n
 
 -- TODO Nil counts as black
 
@@ -246,7 +271,7 @@ runTests =
       prop_noRedRed ∷ Set Int → Bool
       prop_noRedRed  Nil                  = True
       prop_noRedRed (RedN   _ RedN{} _)   = False
-      prop_noRedRed (RedN   _ _ RedN{}) = False
+      prop_noRedRed (RedN   _ _ RedN{})   = False
       prop_noRedRed (BlackN _ l r)        = prop_noRedRed l ∧ prop_noRedRed r
       prop_noRedRed (RedN   _ l r)        = prop_noRedRed l ∧ prop_noRedRed r
       prop_noRedRed _                     = impossible "prop_noRedRed"
@@ -306,34 +331,32 @@ colorCount c = count 0
 
 
 -- | Generate an arbitrary sest of fixed length.
-genSet ∷ (Arbitrary α, Ord α) ⇒ Int → Gen (Set α)
-genSet n = traceShow "gen" $ do
-  let !as = fromList ([]∷[α])
-  !(a,b) ← elements ([1..10] ≫= \a → [1..10] ≫= \b → return (a,b))
-  !_ ← traceShowM (a,b)
-  !ops ← shuffle (replicate a doIns ⧺ replicate b doDel) ∷ (Arbitrary α, Ord α) ⇒ Gen [Set α → Gen (Set α)]
-  !_ ← traceShowM "hi"
-  !s ← foldr1 (>=>) ops as
-  return as {-
-  !_ ← traceShowM "hi2" -}
-
---  case compare (length s) n of
---    EQ → traceShowM "return" ≫ return s
---    LT → traceShowM "hi4" ≫ iterateUntilM ((≥n) ∘ length ∘ traceShow "iter") doIns s
---    GT → traceShowM "hi4" ≫ iterateUntilM ((≤n) ∘ length ∘ traceShow "iter") doDel s
+genSet ∷ (Arbitrary α, Ord α, Show α) ⇒ Int → Gen (Set α)
+genSet n = do
+  let as = fromList []
+  insertions ← elements [1..10]
+  deletions  ← elements [1..10]
+  ops ← shuffle (replicate insertions doIns ⧺ replicate deletions doDel)
+  set ← foldl1' (>=>) ops as
+  case compare (length set) n of
+    EQ → return set
+    LT → iterateUntilM ((≥n) ∘ length) doIns set
+    GT → iterateUntilM ((≤n) ∘ length) doDel set
 
 
     where
-      doDel ∷ Ord α ⇒ Set α → Gen (Set α)
-      doDel s = do
-             !_ ← traceShowM "dodel"
-             x ← elements (toList s)
-             return (rbDelete x s)
-      doIns ∷ (Ord α, Arbitrary α) ⇒ Set α → Gen (Set α)
+      doDel ∷ (Ord α, Show α) ⇒ Set α → Gen (Set α)
+      doDel s
+          | List.null (toList s) = return s
+          | otherwise = do
+               x ← elements (toList s)
+               return (rbDelete x s)
+
+      doIns ∷ (Ord α, Arbitrary α, Show α) ⇒ Set α → Gen (Set α)
       doIns s = do
-             !_ ← traceShowM "doins"
-             x ← resize 10000000 arbitrary `suchThat` (\x → not (member x s))
+             x ← resize (10↑5) arbitrary `suchThat` (not ∘ (`member` s))
              return (insert x s)
+
 
 depths ∷ Set α → [Int]
 depths = count 0
@@ -410,16 +433,6 @@ benchmarks = do
       doInsert    = insert 1000000
 
 
-test2 ∷ IO ()
-test2 = do -- print $ fmap (snd ∘ insertLog 10000000) sets
-     let !x = force $ insert 1000000 (sets ‼ 2)
-     return ()
-      where
-        sets ∷ [Set Int]
-        sets = force ∘ traceShow "force" $ fmap (\len → fromList  [1..len]) [2↑x | x ← [10..20]]
-      -- [11,12,13,14,15,16,17,18,19,20,21]
-      -- Input size doubles, the number of insertion calls is linear, so its run-time must be O(log n)
-      -- But why doesn’t this show up in criterion?
 
 main ∷ IO ()
 main = benchmarks
