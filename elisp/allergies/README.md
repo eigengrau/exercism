@@ -1,10 +1,10 @@
 # Allergies
 
-Write a program that, given a person's allergy score, can tell them whether or not they're allergic to a given item, and their full list of allergies.
+Write a program that, given a person's allergy score, can tell them whether or
+not they're allergic to a given item, and their full list of allergies.
 
-An allergy test produces a single numeric score which contains the
-information about all the allergies the person has (that they were
-tested for).
+An allergy test produces a single numeric score which contains the information
+about all the allergies the person has (that they were tested for).
 
 The list of items (and their value) that were tested are:
 
@@ -16,6 +16,7 @@ The list of items (and their value) that were tested are:
 * chocolate (32)
 * pollen (64)
 * cats (128)
+(+ 1 4 8 16 32 64 128 128 128)
 
 So if Tom is allergic to peanuts and chocolate, he gets a score of 34.
 

@@ -10,9 +10,9 @@
   (= (length seq1) (length seq2)))
 
 (defun string-to-list (str)
-  (append str nil))g
+  (append str nil))
 
-(defun hammin-pointwise (a b)
+(defun hamming-pointwise (a b)
   (if (= a b)
       0
     1))
