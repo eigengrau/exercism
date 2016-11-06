@@ -3,3 +3,6 @@ cabal.sandbox.config
 __pycache__/
 TAGS
 *.elc
+rust/**/target/
+rust/**/Cargo.lock
+rust/**/*.rs.bk

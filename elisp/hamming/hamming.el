@@ -13,9 +13,7 @@
   (append str nil))
 
 (defun hamming-pointwise (a b)
-  (if (= a b)
-      0
-    1))
+  (if (= a b) 0 1))
 
 (defun hamming-distance (seq1 seq2)
   (unless (length-equal-p seq1 seq2)
@@ -23,7 +21,6 @@
   (loop for a in (string-to-list seq1)
         for b in (string-to-list seq2)
         sum (hamming-pointwise a b)))
-
 
 (provide 'point-mutations)
 ;;; point-mutations.el ends here

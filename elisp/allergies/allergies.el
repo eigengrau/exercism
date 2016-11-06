@@ -25,5 +25,8 @@
                                  (setq score (- score code)))
                                (symbol-name food))))))
 
+(defun allergic-to-p (code food)
+  (member food (allergen-list code)))
+
 (provide 'allergies)
 ;;; allergies.el ends here
