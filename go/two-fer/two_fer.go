@@ -9,10 +9,9 @@ var template = "One for %s, one for me."
 
 // Apply a default beneficiary when needed.
 func beneficiary(name string) string {
-	switch name {
-	case "":
+	if name == "" {
 		return "you"
-	default:
+	} else {
 		return name
 	}
 }
