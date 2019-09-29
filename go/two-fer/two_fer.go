@@ -2,7 +2,7 @@
 package twofer
 
 import (
-	"fmt";
+	"fmt"
 )
 
 var template = "One for %s, one for me."
