@@ -1,4 +1,4 @@
-// Build two-fer sentences.
+// Package twofer builds two-fer sentences.
 package twofer
 
 import (
@@ -7,16 +7,14 @@ import (
 
 var template = "One for %s, one for me."
 
-// Apply a default beneficiary when needed.
-func beneficiary(name string) string {
-	if name == "" {
-		return "you"
-	} else {
-		return name
-	}
-}
-
-// Return a two-fer sentence with the beneficiary chosen based on name.
+// ShareWith returns a two-fer sentence with the beneficiary chosen based on
+// name.
 func ShareWith(name string) string {
-	return fmt.Sprintf(template, beneficiary(name))
+	var beneficiary string
+	if name == "" {
+		beneficiary = "you"
+	} else {
+		beneficiary = name
+	}
+	return fmt.Sprintf(template, beneficiary)
 }
