@@ -8,6 +8,7 @@ import (
 
 type set map[rune]interface{}
 
+// IsIsogram checks a word for isogrammaticity.
 func IsIsogram(w string) bool {
 	w = strings.ToLower(w)
 	seen := make(set)
