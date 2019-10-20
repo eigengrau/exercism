@@ -6,7 +6,8 @@ import (
 	"unicode"
 )
 
-type set map[rune]interface{}
+type unit struct{}
+type set map[rune]unit
 
 // IsIsogram checks a word for isogrammaticity.
 func IsIsogram(w string) bool {
@@ -19,7 +20,7 @@ func IsIsogram(w string) bool {
 		if _, ok := seen[c]; ok {
 			return false
 		}
-		seen[c] = nil
+		seen[c] = unit{}
 	}
 	return true
 }
