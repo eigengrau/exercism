@@ -9,7 +9,7 @@ import (
 // Square calculates 2ⁿ⁻¹.
 func Square(n int) (uint64, error) {
 	if n <= 0 || n > 64 {
-		return 0, fmt.Errorf("expecting 0 > n <= 64")
+		return 0, fmt.Errorf("expecting 1 <= n <= 64, not %d", n)
 	}
 	if n == 1 {
 		return 1, nil
